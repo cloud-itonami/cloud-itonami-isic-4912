@@ -66,6 +66,36 @@ Resolves via [`kotoba-lang/industry`](https://github.com/kotoba-lang/industry)
 See [`docs/business-model.md`](docs/business-model.md) and
 [`docs/operator-guide.md`](docs/operator-guide.md).
 
+## Implementation (R0)
+
+`src`/`test` implement a NARROWER, explicitly-scoped slice of the
+business above: a freight-rail **operations coordination** actor, not
+the dispatcher, not the track-safety authority, and not rolling-
+stock/locomotive control. RailFreight-LLM (`railfreight.railfreightllm`)
+proposes against a closed, four-op allowlist enforced by the
+independent Rail Freight Governor (`railfreight.governor`):
+
+- `:log-shipment-record` — consist/cargo-manifest/routing data logging
+- `:schedule-service-operation` — train-consist/routing scheduling proposal
+- `:flag-track-safety-concern` — surfaces a track-fault/hazmat-handling/
+  derailment-risk concern; **always** escalates to human sign-off
+- `:coordinate-maintenance` — rolling-stock/track maintenance coordination
+
+Every proposal carries a literal `:effect :propose` and an `:action`
+drawn from a closed allowlist that structurally EXCLUDES any
+track/dispatch-safety-authority-finalizing action (clearing a train
+for departure, overriding a hazmat-handling protocol) — such an
+action cannot be represented, let alone auto-committed. See
+[`docs/adr/0001-architecture.md`](docs/adr/0001-architecture.md) for
+the full design record. Broader capability-library integration
+(`kotoba-lang/robotics` telemetry, `kotoba-lang/logistics`
+booking/reconciliation) remains a follow-up beyond this R0 slice.
+
+```bash
+clojure -M:test   # 0 failures, 0 errors
+clojure -M:dev:run  # walk the demo lifecycle + HARD-hold scenarios
+```
+
 ## License
 
 AGPL-3.0-or-later.
