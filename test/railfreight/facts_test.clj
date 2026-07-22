@@ -1,30 +1,24 @@
 (ns railfreight.facts-test
+  "`railfreight.facts` used to hold a hardcoded jurisdiction-regulatory
+  catalog (real regulator names, legal citations, government URLs) --
+  removed per `docs/adr/0002-remove-fabricated-jurisdiction-catalog.md`
+  since this actor is an internal operations coordinator, not a
+  jurisdiction-facts actor, and must never assert real-world
+  regulatory content it cannot verify. What remains is the closed,
+  non-regulatory `inspection-results` vocabulary this actor's own
+  `:log-inspection-record` op cites."
   (:require [clojure.test :refer [deftest is]]
             [railfreight.facts :as facts]))
 
-(deftest jpn-has-a-spec-basis
-  (is (some? (facts/spec-basis "JPN")))
-  (is (string? (:provenance (facts/spec-basis "JPN")))))
+(deftest inspection-results-closed-vocabulary
+  (is (contains? facts/inspection-results "pass"))
+  (is (contains? facts/inspection-results "conditional-pass"))
+  (is (contains? facts/inspection-results "fail"))
+  (is (contains? facts/inspection-results "pending-review")))
 
-(deftest all-four-seeded-jurisdictions-have-a-hazmat-spec-basis
-  (doseq [iso3 ["JPN" "USA" "GBR" "DEU"]]
-    (is (some? (facts/hazmat-spec-basis iso3)) (str iso3 " hazmat-spec-basis"))
-    (is (string? (:hazmat-provenance (facts/hazmat-spec-basis iso3))) (str iso3 " hazmat-provenance"))))
-
-(deftest unknown-jurisdiction-has-no-fabricated-spec-basis
-  (is (nil? (facts/spec-basis "ATL"))))
-
-(deftest unknown-jurisdiction-has-no-hazmat-spec-basis
-  (is (nil? (facts/hazmat-spec-basis "ATL"))))
-
-(deftest coverage-never-reports-a-missing-jurisdiction-as-covered
-  (let [report (facts/coverage ["JPN" "ATL" "GBR"])]
-    (is (= 2 (:covered report)))
-    (is (= ["ATL"] (:missing-jurisdictions report)))
-    (is (= ["GBR" "JPN"] (:covered-jurisdictions report)))))
-
-(deftest required-evidence-satisfied-needs-every-item
-  (let [all (facts/evidence-checklist "JPN")]
-    (is (facts/required-evidence-satisfied? "JPN" all))
-    (is (not (facts/required-evidence-satisfied? "JPN" (rest all))))
-    (is (not (facts/required-evidence-satisfied? "ATL" all)) "no spec-basis -> never satisfied")))
+(deftest inspection-result-recognized-predicate
+  (is (true? (facts/inspection-result-recognized? "pass")))
+  (is (true? (facts/inspection-result-recognized? "fail")))
+  (is (false? (facts/inspection-result-recognized? "excellent")))
+  (is (false? (facts/inspection-result-recognized? nil)))
+  (is (false? (facts/inspection-result-recognized? ""))))

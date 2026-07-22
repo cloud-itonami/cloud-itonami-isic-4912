@@ -9,4 +9,63 @@
  :itonami.blueprint/required-technologies [:robotics :identity :forms :dmn :bpmn :audit-ledger :logistics]
  :itonami.blueprint/optional-technologies [:optimization]
  :itonami.blueprint/status :public-oss
- :itonami.blueprint/maturity :implemented}
+ :itonami.blueprint/maturity :implemented
+ :itonami.blueprint/implemented-slice
+ "RailFreight-LLM ⊣ Rail Freight Governor, langgraph-clj StateGraph
+ (langgraph.graph, railfreight.operation/build), append-only audit
+ ledger (railfreight.store/ledger + append-ledger!, MemStore and a
+ DatomicStore backed by langchain.db). A back-office freight-rail
+ OPERATIONS COORDINATION actor -- not the dispatcher, not the
+ track-safety authority, not rolling-stock/locomotive control. Eight
+ closed-allowlist ops, all `:effect :propose` only:
+ `:log-shipment-record` / `:schedule-service-operation` /
+ `:flag-track-safety-concern` / `:coordinate-maintenance` /
+ `:register-hazmat-transport-scope` / `:log-inspection-record` /
+ `:release-rolling-stock-from-maintenance` / `:log-reconciliation-
+ record`. This corrects a fabrication found on review: an earlier
+ build of this slice shipped a hardcoded `railfreight.facts` catalog
+ asserting real jurisdictions' official rail-safety regulator names
+ and legal citations (Japan's 鉄道事業法, US 49 C.F.R. citations, UK
+ ROGS 2006, Germany's AEG, government URLs) as if the codebase itself
+ were an authoritative regulatory source -- removed; `:spec-basis`/
+ `:legal-basis` are now operator-supplied request keys this actor
+ neither invents nor validates against any 'official' list (see
+ docs/adr/0002). It also closes the three README/docs/business-
+ model.md business areas an earlier R0 slice had left as an explicit
+ follow-up: safety-management-system/hazmat-transport-scope
+ management (`:register-hazmat-transport-scope`, HARD-blocked without
+ non-blank operator-supplied evidence -- 'hazmat transport cannot
+ commit without a valid hazmat-transport-scope record'),
+ robotics-assisted track/rolling-stock inspection
+ (`:log-inspection-record`, closed result vocabulary, gates
+ `:release-rolling-stock-from-maintenance`'s own HARD check --
+ 'track/rolling-stock cannot be marked serviceable without a completed
+ inspection record present'), and booking/reconciliation records
+ (`:log-reconciliation-record`, HARD-blocked without non-blank
+ evidence -- docs/business-model.md's own Trust Control
+ 'reconciliation records require verified evidence'). Fifteen HARD,
+ permanent, un-overridable governor checks (effect-not-propose /
+ op-not-allowlisted / action-not-allowlisted / scope-exclusion /
+ no-spec-basis / record-not-verified / hazmat-scope-evidence-missing /
+ hazmat-handling-protocol-unconfirmed / inspection-record-invalid /
+ maintenance-not-open / maintenance-release-uninspected /
+ reconciliation-evidence-missing / open-safety-concern /
+ already-scheduled / already-coordinating), independently verified
+ against Store ground truth, never the advisor's own claim. Five ops
+ (`:schedule-service-operation` / `:flag-track-safety-concern` /
+ `:coordinate-maintenance` / `:register-hazmat-transport-scope` /
+ `:release-rolling-stock-from-maintenance`) ALWAYS escalate to a human
+ via the compiled graph's `:request-approval` node
+ (`interrupt-before`, checkpoint-based resume) at TWO independent
+ layers (governor `high-stakes` + `railfreight.phase`'s permanent
+ absence from every phase's `:auto` set) -- proven end to end by
+ `test/railfreight/governor_contract_test.clj` against the REAL
+ compiled graph, `test/railfreight/governor_self_trip_test.clj`
+ (a dedicated regression test against a fleet-wide self-tripping
+ scope-exclusion bug class, run across all eight ops), and
+ `test/railfreight/phase_test.clj`. MemStore ‖ DatomicStore parity
+ proven by `test/railfreight/store_contract_test.clj`. CI
+ (`.github/workflows/ci.yml`, sibling-checkout pattern) was missing
+ and is added in this fix. See docs/adr/0001 (original architecture)
+ and docs/adr/0002 (fabrication correction + business-scope
+ extension) for the full design record."}
