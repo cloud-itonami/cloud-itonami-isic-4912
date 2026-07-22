@@ -36,7 +36,8 @@
   (let [[db actor] (fresh)
         res (exec-op actor "t1"
                   {:op :log-shipment-record :subject "consist-1"
-                   :patch {:id "consist-1" :carrier "Updated Rail Co"}} operator)]
+                   :patch {:id "consist-1" :carrier "Updated Rail Co"}
+                   :spec-basis "operator-submitted-sms-registration-JPN-0001"} operator)]
     (is (= :commit (get-in res [:state :disposition])))
     (is (= "Updated Rail Co" (:carrier (store/consist db "consist-1"))) "SSoT actually updated")
     (is (= 1 (count (store/ledger db))))))
@@ -50,12 +51,12 @@
         (is (= :commit (get-in r2 [:state :disposition])))
         (is (true? (:scheduled? (store/consist db "consist-1"))))))))
 
-(deftest fabricated-jurisdiction-is-held
-  (testing "a log-shipment-record proposal with no official spec-basis -> HOLD, never reaches a human"
+(deftest log-shipment-record-without-operator-supplied-spec-basis-is-held
+  (testing "a log-shipment-record proposal with no operator-supplied spec-basis -> HOLD, never reaches a human -- this actor never invents one"
     (let [[db actor] (fresh)
           res (exec-op actor "t3"
                     {:op :log-shipment-record :subject "consist-6"
-                     :patch {:id "consist-6"} :no-spec? true} operator)]
+                     :patch {:id "consist-6"}} operator)]
       (is (= :hold (get-in res [:state :disposition])))
       (is (some #{:no-spec-basis} (-> (store/ledger db) first :basis)))
       (is (nil? (store/consist db "consist-6"))
@@ -170,11 +171,143 @@
   (testing "write-only-through-ledger: N operations -> N ledger facts"
     (let [[db actor] (fresh)]
       (exec-op actor "a" {:op :log-shipment-record :subject "consist-1"
-                          :patch {:id "consist-1" :carrier "Local Freight Rail Co"}} operator)
+                          :patch {:id "consist-1" :carrier "Local Freight Rail Co"}
+                          :spec-basis "operator-submitted-sms-registration-JPN-0001"} operator)
       (exec-op actor "b" {:op :log-shipment-record :subject "consist-6"
-                          :patch {:id "consist-6"} :no-spec? true} operator)
+                          :patch {:id "consist-6"}} operator)
       (is (= 2 (count (store/ledger db)))
           "one commit + one hold, both recorded"))))
+
+;; ----------------------- register-hazmat-transport-scope -----------------------
+
+(deftest hazmat-transport-scope-with-no-evidence-is-held
+  (testing "'hazmat transport cannot commit without a valid hazmat-transport-scope record' -- no evidence -> HOLD, never reaches a human"
+    (let [[db actor] (fresh)
+          res (exec-op actor "hz1" {:op :register-hazmat-transport-scope :subject "consist-1"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (some #{:hazmat-scope-evidence-missing} (-> (store/ledger db) last :basis)))
+      (is (false? (:hazmat-handling-confirmed? (store/consist db "consist-1")))))))
+
+(deftest hazmat-transport-scope-on-unregistered-consist-is-held
+  (testing "record-not-verified applies to hazmat-transport-scope confirmation too -- before ANY action"
+    (let [[db actor] (fresh)
+          res (exec-op actor "hz2" {:op :register-hazmat-transport-scope :subject "consist-2"
+                                    :evidence "operator-submitted-evidence"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (some #{:record-not-verified} (-> (store/ledger db) last :basis))))))
+
+(deftest hazmat-transport-scope-with-evidence-always-escalates-then-commits
+  (testing "with operator-supplied evidence, escalates for human sign-off, then commits and confirms hazmat-handling"
+    (let [[db actor] (fresh)
+          r1 (exec-op actor "hz3" {:op :register-hazmat-transport-scope :subject "consist-3"
+                                   :evidence "operator-submitted-hazmat-handling-protocol-ack"} operator)]
+      (is (= :interrupted (:status r1)) "pauses for human approval even when governor-clean")
+      (let [r2 (approve! actor "hz3")]
+        (is (= :commit (get-in r2 [:state :disposition])))
+        (is (true? (:hazmat-handling-confirmed? (store/consist db "consist-3"))))
+        (is (= "operator-submitted-hazmat-handling-protocol-ack"
+               (:hazmat-handling-evidence (store/consist db "consist-3"))))))))
+
+(deftest hazmat-transport-scope-never-auto-at-any-phase
+  (testing "structural invariant: confirming a hazmat-transport scope must ALWAYS reach a human"
+    (let [[_db actor] (fresh)
+          r1 (exec-op actor "hz4" {:op :register-hazmat-transport-scope :subject "consist-1"
+                                   :evidence "operator-submitted-evidence"} operator)]
+      (is (= :interrupted (:status r1))))))
+
+;; ----------------------- log-inspection-record -----------------------
+
+(deftest inspection-record-with-unrecognized-result-is-held
+  (testing "an unrecognized inspection-result code -> HOLD, never reaches a human"
+    (let [[db actor] (fresh)
+          res (exec-op actor "in1" {:op :log-inspection-record :subject "consist-1"
+                                    :inspection-result "excellent"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (some #{:inspection-record-invalid} (-> (store/ledger db) last :basis)))
+      (is (nil? (:last-inspection-result (store/consist db "consist-1")))))))
+
+(deftest inspection-record-on-unregistered-consist-is-held
+  (let [[db actor] (fresh)
+        res (exec-op actor "in2" {:op :log-inspection-record :subject "consist-2"
+                                  :inspection-result "pass"} operator)]
+    (is (= :hold (get-in res [:state :disposition])))
+    (is (some #{:record-not-verified} (-> (store/ledger db) last :basis)))))
+
+(deftest inspection-record-with-recognized-result-auto-commits
+  (testing "a recognized inspection-result code from a registered consist is pure data logging -- auto-commits, no human approval needed"
+    (let [[db actor] (fresh)
+          res (exec-op actor "in3" {:op :log-inspection-record :subject "consist-1"
+                                    :inspection-result "pass"} operator)]
+      (is (= :commit (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (= "pass" (:last-inspection-result (store/consist db "consist-1")))))))
+
+;; ----------------------- release-rolling-stock-from-maintenance -----------------------
+
+(deftest release-with-no-open-maintenance-is-held
+  (testing "'track/rolling-stock cannot be marked serviceable' with nothing to release -> HOLD"
+    (let [[db actor] (fresh)
+          res (exec-op actor "rl1" {:op :release-rolling-stock-from-maintenance :subject "consist-1"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (some #{:maintenance-not-open} (-> (store/ledger db) last :basis))))))
+
+(deftest release-with-no-completed-inspection-is-held
+  (testing "'track/rolling-stock cannot be marked serviceable without a completed inspection record present' -- an open maintenance request but no inspection on file -> HOLD"
+    (let [[db actor] (fresh)
+          res (exec-op actor "rl2" {:op :release-rolling-stock-from-maintenance :subject "consist-5"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (some #{:maintenance-release-uninspected} (-> (store/ledger db) last :basis)))
+      (is (true? (:maintenance-open? (store/consist db "consist-5"))) "still open -- HOLD never released it"))))
+
+(deftest release-with-open-safety-concern-is-held
+  (testing "an unresolved track-safety concern blocks maintenance release too, not only scheduling/coordination"
+    ;; consist-4 has an open concern but no open maintenance/inspection either;
+    ;; open-safety-concern fires independently of those two other HARD checks.
+    (let [[db actor] (fresh)
+          res (exec-op actor "rl3" {:op :release-rolling-stock-from-maintenance :subject "consist-4"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (some #{:open-safety-concern} (-> (store/ledger db) last :basis))))))
+
+(deftest release-with-open-maintenance-and-completed-inspection-always-escalates-then-commits
+  (testing "consist-7 is pre-seeded with an open maintenance request AND a completed passing inspection -- clean release still ALWAYS needs a human"
+    (let [[db actor] (fresh)
+          r1 (exec-op actor "rl4" {:op :release-rolling-stock-from-maintenance :subject "consist-7"} operator)]
+      (is (= :interrupted (:status r1)) "pauses for human approval even when governor-clean")
+      (let [r2 (approve! actor "rl4")]
+        (is (= :commit (get-in r2 [:state :disposition])))
+        (is (false? (:maintenance-open? (store/consist db "consist-7"))) "release closes the open maintenance request")))))
+
+;; ----------------------- log-reconciliation-record -----------------------
+
+(deftest reconciliation-record-with-no-evidence-is-held
+  (testing "docs/business-model.md Trust Control: 'reconciliation records require verified evidence' -- no evidence -> HOLD"
+    (let [[db actor] (fresh)
+          res (exec-op actor "rc1" {:op :log-reconciliation-record :subject "consist-1"} operator)]
+      (is (= :hold (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (some #{:reconciliation-evidence-missing} (-> (store/ledger db) last :basis)))
+      (is (nil? (:last-reconciliation-evidence (store/consist db "consist-1")))))))
+
+(deftest reconciliation-record-on-unregistered-consist-is-held
+  (let [[db actor] (fresh)
+        res (exec-op actor "rc2" {:op :log-reconciliation-record :subject "consist-2"
+                                  :evidence "operator-submitted-invoice-ref"} operator)]
+    (is (= :hold (get-in res [:state :disposition])))
+    (is (some #{:record-not-verified} (-> (store/ledger db) last :basis)))))
+
+(deftest reconciliation-record-with-evidence-auto-commits
+  (testing "verified evidence from a registered consist is pure data logging -- auto-commits"
+    (let [[db actor] (fresh)
+          res (exec-op actor "rc3" {:op :log-reconciliation-record :subject "consist-1"
+                                    :evidence "operator-submitted-invoice-ref-0001" :amount 15000} operator)]
+      (is (= :commit (get-in res [:state :disposition])))
+      (is (not= :interrupted (:status res)))
+      (is (= "operator-submitted-invoice-ref-0001" (:last-reconciliation-evidence (store/consist db "consist-1"))))
+      (is (= 15000 (:last-reconciliation-amount (store/consist db "consist-1")))))))
 
 ;; ----------------------- structural checks (hand-crafted proposals) -----------------------
 

@@ -27,18 +27,28 @@
   (let [verdict (governor/check request {:actor-id "op-1"} proposal st)]
     (boolean (some #{:scope-exclusion-violation} (mapv :rule (:violations verdict))))))
 
+(def ^:private all-ops
+  "Every op in the closed allowlist -- see `railfreight.governor/
+  allowed-ops`. Kept as a literal (not a require of that var) so this
+  regression test independently re-derives which ops exist, the same
+  'don't trust the thing under test to describe its own scope'
+  discipline the rest of this ns docstring establishes."
+  [:log-shipment-record :schedule-service-operation
+   :flag-track-safety-concern :coordinate-maintenance
+   :register-hazmat-transport-scope :log-inspection-record
+   :release-rolling-stock-from-maintenance :log-reconciliation-record])
+
 (deftest default-advisor-never-self-trips-the-scope-exclusion-check
   (let [db (store/seed-db)
         advisor (llm/mock-advisor)
         subjects (mapv :id (store/all-consists db))
-        requests (into
-                  ;; every op, against every seeded consist
-                  (for [op [:log-shipment-record :schedule-service-operation
-                            :flag-track-safety-concern :coordinate-maintenance]
-                        subject subjects]
-                    {:op op :subject subject})
-                  ;; plus the dedicated no-spec-basis branch of :log-shipment-record
-                  [{:op :log-shipment-record :subject "consist-1" :no-spec? true}])]
+        requests (for [op all-ops
+                       subject subjects]
+                   ;; :evidence/:inspection-result are deliberately omitted
+                   ;; here -- the self-trip guarantee must hold even for the
+                   ;; LOW-confidence/HARD-hold branches these ops take with
+                   ;; no operator-supplied payload, not only the happy path.
+                   {:op op :subject subject})]
     (doseq [{:keys [op subject] :as request} requests]
       (testing (str op " / " subject)
         (let [proposal (llm/-advise advisor db request)]
@@ -51,8 +61,7 @@
     (let [db (store/seed-db)
           advisor (llm/mock-advisor)
           subjects (mapv :id (store/all-consists db))]
-      (doseq [op [:log-shipment-record :schedule-service-operation
-                  :flag-track-safety-concern :coordinate-maintenance]
+      (doseq [op all-ops
               subject subjects]
         (let [proposal (llm/-advise advisor db {:op op :subject subject})
               text (str/lower-case (str (:summary proposal) " " (:rationale proposal)))]

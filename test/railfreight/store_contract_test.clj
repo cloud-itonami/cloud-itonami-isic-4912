@@ -23,7 +23,11 @@
       (is (false? (:safety-concern-resolved? (store/consist s "consist-4"))))
       (is (true? (:maintenance-open? (store/consist s "consist-5"))))
       (is (false? (:scheduled? (store/consist s "consist-1"))))
-      (is (= ["consist-1" "consist-2" "consist-3" "consist-4" "consist-5"]
+      (is (nil? (:last-inspection-result (store/consist s "consist-1"))))
+      (is (= "pass" (:last-inspection-result (store/consist s "consist-7"))))
+      (is (true? (:maintenance-open? (store/consist s "consist-7"))))
+      (is (nil? (:hazmat-handling-evidence (store/consist s "consist-1"))))
+      (is (= ["consist-1" "consist-2" "consist-3" "consist-4" "consist-5" "consist-7"]
              (mapv :id (store/all-consists s))))
       (is (= [] (store/ledger s)))
       (is (= [] (store/schedule-history s)))
@@ -60,7 +64,30 @@
       (testing "ledger is append-only and order-preserving"
         (store/append-ledger! s {:op :a :disposition :commit})
         (store/append-ledger! s {:op :b :disposition :hold})
-        (is (= [:commit :hold] (mapv :disposition (store/ledger s))))))))
+        (is (= [:commit :hold] (mapv :disposition (store/ledger s)))))
+      (testing "hazmat-transport-scope confirmation commits"
+        (store/commit-record! s {:action :consist/confirm-hazmat-handling :path ["consist-1"]
+                                 :value {:evidence "operator-submitted-hazmat-handling-protocol-ack"}})
+        (is (true? (:hazmat-handling-confirmed? (store/consist s "consist-1"))))
+        (is (= "operator-submitted-hazmat-handling-protocol-ack"
+               (:hazmat-handling-evidence (store/consist s "consist-1")))))
+      (testing "inspection record commits"
+        (store/commit-record! s {:action :consist/log-inspection :path ["consist-1"]
+                                 :value {:inspection-result "pass"}})
+        (is (= "pass" (:last-inspection-result (store/consist s "consist-1")))))
+      (testing "maintenance coordination drafts a record and opens the coordination"
+        (store/commit-record! s {:action :consist/mark-maintenance-coordinated :path ["consist-1"]})
+        (is (= "JPN-MNT-000000" (get (first (store/maintenance-history s)) "record_id")))
+        (is (true? (:maintenance-open? (store/consist s "consist-1"))))
+        (is (true? (store/consist-maintenance-already-open? s "consist-1"))))
+      (testing "maintenance release commits and closes the open coordination"
+        (store/commit-record! s {:action :consist/mark-maintenance-released :path ["consist-1"]})
+        (is (false? (:maintenance-open? (store/consist s "consist-1")))))
+      (testing "reconciliation record commits"
+        (store/commit-record! s {:action :consist/log-reconciliation :path ["consist-1"]
+                                 :value {:evidence "operator-submitted-invoice-ref-0001" :amount 15000}})
+        (is (= "operator-submitted-invoice-ref-0001" (:last-reconciliation-evidence (store/consist s "consist-1"))))
+        (is (= 15000 (:last-reconciliation-amount (store/consist s "consist-1"))))))))
 
 (deftest datomic-empty-store-is-usable
   (let [s (store/datomic-store)]

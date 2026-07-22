@@ -66,34 +66,60 @@ Resolves via [`kotoba-lang/industry`](https://github.com/kotoba-lang/industry)
 See [`docs/business-model.md`](docs/business-model.md) and
 [`docs/operator-guide.md`](docs/operator-guide.md).
 
-## Implementation (R0)
+## Implementation (R0 + R1)
 
 `src`/`test` implement a NARROWER, explicitly-scoped slice of the
 business above: a freight-rail **operations coordination** actor, not
 the dispatcher, not the track-safety authority, and not rolling-
 stock/locomotive control. RailFreight-LLM (`railfreight.railfreightllm`)
-proposes against a closed, four-op allowlist enforced by the
-independent Rail Freight Governor (`railfreight.governor`):
+proposes against a closed op allowlist enforced by the independent
+Rail Freight Governor (`railfreight.governor`):
 
 - `:log-shipment-record` — consist/cargo-manifest/routing data logging
 - `:schedule-service-operation` — train-consist/routing scheduling proposal
 - `:flag-track-safety-concern` — surfaces a track-fault/hazmat-handling/
   derailment-risk concern; **always** escalates to human sign-off
 - `:coordinate-maintenance` — rolling-stock/track maintenance coordination
+- `:register-hazmat-transport-scope` — records operator-supplied evidence
+  that a hazmat-handling protocol is on file for a consist; **always**
+  escalates. Structural invariant: hazmat transport cannot commit
+  without a valid hazmat-transport-scope record.
+- `:log-inspection-record` — robotics-assisted track/rolling-stock
+  inspection result logging (closed result vocabulary); pure data
+  logging, auto-eligible once a record is verified.
+- `:release-rolling-stock-from-maintenance` — proposes marking rolling
+  stock/track serviceable again; **always** escalates. Structural
+  invariant: track/rolling-stock cannot be marked serviceable without
+  a completed inspection record present.
+- `:log-reconciliation-record` — booking/reconciliation record logging,
+  gated on non-blank verified evidence (`docs/business-model.md` Trust
+  Control); pure data logging, auto-eligible.
 
 Every proposal carries a literal `:effect :propose` and an `:action`
 drawn from a closed allowlist that structurally EXCLUDES any
 track/dispatch-safety-authority-finalizing action (clearing a train
-for departure, overriding a hazmat-handling protocol) — such an
-action cannot be represented, let alone auto-committed. See
+for departure, overriding a hazmat-handling protocol, certifying
+rolling stock as serviceable) — such an action cannot be represented,
+let alone auto-committed. See
 [`docs/adr/0001-architecture.md`](docs/adr/0001-architecture.md) for
-the full design record. Broader capability-library integration
-(`kotoba-lang/robotics` telemetry, `kotoba-lang/logistics`
-booking/reconciliation) remains a follow-up beyond this R0 slice.
+the original R0 design record and
+[`docs/adr/0002-remove-fabricated-jurisdiction-catalog.md`](docs/adr/0002-remove-fabricated-jurisdiction-catalog.md)
+for the R1 correction (a prior `railfreight.facts` catalog asserted
+real jurisdictions' official regulator names and legal citations —
+removed; `:spec-basis`/`:legal-basis` are now operator-supplied
+request keys, never codebase-asserted fact) and business-scope
+extension (the three README business areas — safety-management-
+system/hazmat-transport-scope management, robotics-assisted
+inspection, and booking/reconciliation — that R0 had left as an
+explicit follow-up). Broader capability-library integration
+(`kotoba-lang/robotics` telemetry, `kotoba-lang/logistics` booking/
+reconciliation *contracts*, as distinct from this actor's own minimal
+booking/reconciliation record-keeping) remains a follow-up.
 
 ```bash
-clojure -M:test   # 0 failures, 0 errors
-clojure -M:dev:run  # walk the demo lifecycle + HARD-hold scenarios
+clojure -M:dev:test  # 0 failures, 0 errors (offline: local sibling checkouts)
+clojure -M:dev:run    # walk the HARD-hold scenarios + demo lifecycle
+clojure -M:lint       # clj-kondo, 0 errors
 ```
 
 ## License
