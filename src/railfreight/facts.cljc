@@ -27,7 +27,40 @@
   What remains here is exactly the kind of content the domain-fact
   caution in this actor's build brief allows: closed vocabularies
   INTERNAL to this actor's own record-keeping, never a citation of an
-  external regulatory standard.")
+  external regulatory standard.
+
+  ENFORCEMENT (2026-07-25). ADR-0002's rule was prose-only: nothing
+  stopped a later change from quietly reintroducing a fabricated
+  citation catalog here. It is now machine-checked from two sides:
+
+    - `citation-policy` below, mirrored in `blueprint.edn` as
+      `:itonami.blueprint/citation-policy :internal-vocabulary-only`
+      with a mandatory `:itonami.blueprint/citation-policy-basis`
+      pointing at ADR-0002, so the fleet audit
+      (`scripts/itonami-fleet-audit.cljs`) can distinguish \"citations
+      forbidden by design\" from \"citations missing\" and stops
+      reporting this repo as a real-world-ingest gap that must never
+      be closed.
+    - `test/railfreight/facts_test.clj` asserts this namespace contains
+      no absolute http(s) URL and no regulatory-citation shape, so
+      reintroducing the fabrication fails CI instead of passing review.")
+
+(def citation-policy
+  "This namespace deliberately holds NO external regulatory citations.
+
+  `:internal-vocabulary-only` means: every value here is a closed
+  vocabulary internal to this actor's own record-keeping. Real-world
+  regulatory content (`:spec-basis` / `:legal-basis`) is
+  operator-supplied per request and never invented or validated here.
+  A zero citation count is the correct, complete state of this
+  namespace -- see `:basis` for the decision record."
+  {:policy :internal-vocabulary-only
+   :basis "docs/adr/0002-remove-fabricated-jurisdiction-catalog.md"
+   :rationale (str "Internal operations-coordination actor, not a "
+                   "jurisdiction-facts actor. An earlier build fabricated "
+                   "real regulators' names, legal citations and government "
+                   "URLs here; ADR-0002 removed them and forbids their "
+                   "return.")})
 
 (def inspection-results
   "Closed set of recognized track/rolling-stock inspection outcome codes

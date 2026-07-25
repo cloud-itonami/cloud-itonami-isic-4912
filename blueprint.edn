@@ -10,6 +10,22 @@
  :itonami.blueprint/optional-technologies [:optimization]
  :itonami.blueprint/status :public-oss
  :itonami.blueprint/maturity :implemented
+ ;; This actor holds NO external regulatory citations, on purpose. ADR-0002
+ ;; removed a fabricated jurisdiction catalog (real regulators' names, 49
+ ;; C.F.R. / 鉄道事業法 / ROGS 2006 / AEG citations, government URLs) because
+ ;; this is an internal operations-coordination actor: `:spec-basis` /
+ ;; `:legal-basis` are operator-supplied request keys it neither invents nor
+ ;; validates against any "official" list. A zero citation count here is the
+ ;; CORRECT, complete state -- not an unpopulated catalog.
+ ;;
+ ;; Declared machine-readably so the fleet audit
+ ;; (scripts/itonami-fleet-audit.cljs) can tell "citations forbidden by
+ ;; design" apart from "citations missing", instead of reporting this repo as
+ ;; a real-world-ingest gap that must never be closed. The basis key is
+ ;; mandatory: the declaration is only honoured when it names the document
+ ;; justifying it, so this cannot become a silent opt-out.
+ :itonami.blueprint/citation-policy :internal-vocabulary-only
+ :itonami.blueprint/citation-policy-basis "docs/adr/0002-remove-fabricated-jurisdiction-catalog.md"
  :itonami.blueprint/implemented-slice
  "RailFreight-LLM ⊣ Rail Freight Governor, langgraph-clj StateGraph
  (langgraph.graph, railfreight.operation/build), append-only audit
