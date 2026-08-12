@@ -13,7 +13,13 @@
  ;; This repo is standalone (forkable outside the workspace); the
  ;; :local/root paths only resolve inside the monorepo checkout -- a
  ;; standalone fork should override them with git coordinates.
- :deps {io.github.kotoba-lang/langgraph
+ :deps {;; jp-go-dds -- this workspace's base design system (デジタル庁
+        ;; デザインシステム). Used ONLY by `railfreight.render-html` to skin
+        ;; the build-time operator console; the actor itself has no UI.
+        io.github.kotoba-lang/jp-go-digital-design-system
+        {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system"
+         :git/sha "83db99546eabc53613ae826ea41d1533a3c574af"}
+        io.github.kotoba-lang/langgraph
         {:local/root "../../kotoba-lang/langgraph"}}
  :aliases
  {;; offline workspace dev -- pin transitive langchain to local checkout
@@ -22,6 +28,11 @@
          {:local/root "../../kotoba-lang/langchain"}}}
   ;; clojure -M:dev:run  -> drive the demo through one OperationActor
   :run {:main-opts ["-m" "railfreight.sim"]}
+  ;; clojure -M:dev:render-html [out-file] -> regenerate
+  ;; docs/samples/operator-console.html through the real actor stack
+  ;; (flagship checklist item 2). Refuses to write if the run produced
+  ;; no governor hold -- see railfreight.render-html/-main.
+  :render-html {:main-opts ["-m" "railfreight.render-html"]}
   :test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
