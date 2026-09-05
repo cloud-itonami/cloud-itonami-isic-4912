@@ -1,450 +1,558 @@
 (ns railfreight.render-html
   "Build-time HTML renderer for `docs/samples/operator-console.html`.
 
-  Closes flagship checklist item 2 for this repo: it previously had NO
-  demo page and no generator at all. This namespace drives the REAL
-  actor stack -- `railfreight.operation` (a langgraph-clj StateGraph)
-  -> `railfreight.railfreightllm` (the contained advisor) ->
-  `railfreight.governor` (the independent censor) -> `railfreight.phase`
-  (the rollout gate) -> `railfreight.store` -- and renders the page
-  from the RESULTING store, ledger and draft-record histories.
+  Drives the REAL actor stack -- `railfreight.operation/build` (a
+  compiled langgraph-clj StateGraph) over the REAL seeded store
+  (`railfreight.store/seed-db`), through the REAL Rail Freight Governor
+  (`railfreight.governor/check`) and the REAL rollout phase gate
+  (`railfreight.phase/gate`) -- and renders whatever those produced.
+  Nothing on the page is hand-written domain content:
 
-  NOTHING on the page is hand-typed telemetry. Every consist id,
-  carrier, route, cargo line, schedule number, maintenance number,
-  inspection code, hold rule and hold detail string is read back out of
-  the store/ledger this run actually produced; the action-gate table is
-  derived from `railfreight.phase/phases` and
-  `railfreight.governor/allowed-ops`/`high-stakes` rather than
-  transcribed. If a governor check is renamed or a phase's `:auto` set
-  changes, this page changes with it.
+    - every consist row is read back out of the store after the run
+      (`store/all-consists`, `store/ledger`, `store/schedule-history`,
+      `store/maintenance-history`),
+    - every HARD-hold rule name and every violation detail string is
+      the governor's own `:violations` entry off the ledger fact --
+      never a literal in this namespace,
+    - the phase-gate table is derived from `railfreight.phase/phases`
+      and the governor-configuration table from the public vars of
+      `railfreight.governor` / `railfreight.facts`.
 
-  DETERMINISM. Nothing in this actor's write path reads a clock or a
-  RNG: `railfreight.registry` builds jurisdiction-scoped sequence
-  numbers (`JPN-SCH-000000`) from a counter in the store, the ledger is
-  an append-only vector, and `store/all-consists` sorts by `:id`. The
-  page therefore carries no timestamp and no generated id, and two runs
-  from the same seed are byte-identical (verify by diffing two
-  consecutive runs). Sets read out of the source namespaces are sorted
-  explicitly before rendering, because set iteration order is not part
-  of any contract.
+  The ONLY hand-written text is each scenario's `:exercises` note (a
+  static description of the fixed op-gate contract this run is meant to
+  demonstrate) and the prose in the section headers -- both are
+  explicitly labelled where they appear.
 
-  BUILD-TIME INVARIANT. `-main` refuses to write the file if the run
-  produced ZERO `:governor-hold` facts. The whole point of this console
-  is to show that a HARD hold is un-overridable and never reaches a
-  human, so a scenario that quietly stopped producing holds would make
-  the page a lie -- that failure is a build failure here, not a
-  convention.
+  Subject provenance (the demo may not invent subjects): every
+  `:subject` driven below is a consist id actually present in
+  `railfreight.store/demo-data` -- `consist-1` `consist-2` `consist-3`
+  `consist-4` `consist-5` `consist-7`. `railfreight.sim`'s own
+  `consist-6` scenario is deliberately NOT reused here: that id is not
+  in the seed, so its hold is about a missing operator citation on a
+  consist that does not exist. The same `:no-spec-basis` rule is
+  exercised here against the real, deliberately-unregistered
+  `consist-2` instead.
 
-  Usage: `clojure -M:dev:render-html [out-file]`
-  (default `docs/samples/operator-console.html`)."
-  (:require [jp-go-dds.skin]
-            [clojure.string :as str]
-            [railfreight.store :as store]
+  Deterministic: no clock, no randomness, no network, no timestamp in
+  the page content. Re-running writes a byte-identical file.
+
+  Run: `clojure -M:dev:render-html [out-file]`
+  (default out-file `docs/samples/operator-console.html`)."
+  (:require [clojure.string :as str]
+            [jp-go-dds.skin]
+            [langgraph.graph :as g]
+            [railfreight.facts :as facts]
             [railfreight.governor :as governor]
-            [railfreight.phase :as phase]
             [railfreight.operation :as op]
-            [langgraph.graph :as g]))
+            [railfreight.phase :as phase]
+            [railfreight.store :as store]))
 
-(def ^:private operator
-  "The same operator context `railfreight.sim` uses -- phase 3
-  (supervised-auto), so the page shows the MOST permissive rollout
-  phase this actor has and the holds below are still un-overridable."
-  {:actor-id "op-1" :actor-role :rail-operations-coordinator :phase 3})
+;; ----------------------------- the run -----------------------------
 
-(defn- exec! [actor tid request]
-  (g/run* actor {:request request :context operator} {:thread-id tid}))
+(def ^:private coordinator
+  {:actor-id "op-1" :actor-role :rail-operations-coordinator
+   :phase phase/default-phase})
 
-(defn- approve! [actor tid]
-  (g/run* actor {:approval {:status :approved :by "op-1"}}
-          {:thread-id tid :resume? true}))
+(def ^:private scenarios
+  "One entry = one coordination request driven through the real actor.
+  `:approval`, when present, is the human decision handed back to the
+  paused graph (`interrupt-before #{:request-approval}`); it is only
+  ever offered when the graph actually paused, so a HARD hold never
+  reaches it.
+
+  ORDER MATTERS. Governor HOLDs never mutate the SSoT, so they can sit
+  anywhere; commits do, so the ordering below is deliberate:
+  `consist-1`'s double-schedule hold must follow its first schedule
+  commit, `consist-3`'s unconfirmed-hazmat hold must precede its
+  hazmat-transport-scope commit, and `consist-1`'s track-safety-concern
+  flag is last of its coordination ops because committing it raises a
+  concern that would then block them.
+
+  `:exercises` is the one piece of hand-written prose on the rendered
+  page: a static description of this actor's own fixed op-gate
+  contract, NOT runtime telemetry."
+  [{:tid "t01"
+    :exercises "Shipment/route record logging with an operator-supplied spec-basis. Governor-clean and :log-shipment-record is one of the three pure data-logging ops in phase 3's :auto set -> auto-commits with no human."
+    :request {:op :log-shipment-record :subject "consist-1"
+              :patch {:id "consist-1" :carrier "Local Freight Rail Co"}
+              :spec-basis "operator-submitted-sms-registration-JPN-0001"
+              :legal-basis "operator-submitted"}}
+
+   {:tid "t02"
+    :exercises "The same op with NO operator-supplied citation. This actor never invents a spec-basis to fill the gap, so the proposal carries none and the governor HARD-holds it."
+    :request {:op :log-shipment-record :subject "consist-2"
+              :patch {:id "consist-2" :carrier "Local Freight Rail Co"}}}
+
+   {:tid "t03"
+    :exercises "Service scheduling against consist-2, whose shipment/route record was never independently verified/registered. Every non-registration op requires that first. HARD hold."
+    :request {:op :schedule-service-operation :subject "consist-2"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t04"
+    :exercises "Service scheduling for a hazmat consist whose hazmat-transport-scope record is not on file. The governor re-reads the consist's own :hazmat-handling-confirmed? fact rather than believing the advisor. HARD hold."
+    :request {:op :schedule-service-operation :subject "consist-3"}}
+
+   {:tid "t05"
+    :exercises "Service scheduling for a consist carrying an unresolved track-safety concern. Un-overridable: no approver can clear it. HARD hold."
+    :request {:op :schedule-service-operation :subject "consist-4"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t06"
+    :exercises "A SECOND maintenance-coordination request while one is already open, guarded off a dedicated :maintenance-open? boolean, never a :status value. HARD hold."
+    :request {:op :coordinate-maintenance :subject "consist-5"}}
+
+   {:tid "t07"
+    :exercises "Releasing rolling stock whose maintenance IS open but which has no completed inspection record on file. Track/rolling stock is never marked serviceable uninspected. HARD hold."
+    :request {:op :release-rolling-stock-from-maintenance :subject "consist-5"}}
+
+   {:tid "t08"
+    :exercises "Releasing consist-1, which has neither an open maintenance request nor an inspection record yet. Two independent checks fire on the one proposal. HARD hold."
+    :request {:op :release-rolling-stock-from-maintenance :subject "consist-1"}}
+
+   {:tid "t09"
+    :exercises "An inspection record citing a result code outside railfreight.facts/inspection-results. An unrecognized code is not a plausible observation. HARD hold."
+    :request {:op :log-inspection-record :subject "consist-1"
+              :inspection-result "excellent"}}
+
+   {:tid "t10"
+    :exercises "A booking/reconciliation record with no verified evidence -- docs/business-model.md's own Trust Control. HARD hold."
+    :request {:op :log-reconciliation-record :subject "consist-1"}}
+
+   {:tid "t11"
+    :exercises "A hazmat-transport-scope confirmation with no operator-submitted evidence. Hazmat transport cannot commit without a valid scope record. HARD hold."
+    :request {:op :register-hazmat-transport-scope :subject "consist-1"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t12"
+    :exercises "An op outside the closed allowlist -- a train-dispatch clearance this actor must never be able to represent. Both the op allowlist and the action allowlist reject it; it never reaches a human. HARD hold."
+    :request {:op :clear-consist-for-departure :subject "consist-1"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t13"
+    :exercises "Service scheduling on a clean consist. Governor-clean, but :schedule-service-operation is in no phase's :auto set at any phase -> escalates; the human rail operations coordinator approves and the schedule number is minted."
+    :request {:op :schedule-service-operation :subject "consist-1"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t14"
+    :exercises "The SAME consist scheduled twice, guarded off a dedicated :scheduled? boolean. HARD hold."
+    :request {:op :schedule-service-operation :subject "consist-1"}}
+
+   {:tid "t15"
+    :exercises "Maintenance coordination on the same clean consist. Never auto-eligible -> escalates; approved, and the maintenance number is minted."
+    :request {:op :coordinate-maintenance :subject "consist-1"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t16"
+    :exercises "A robotics-assisted inspection record with a recognized result code. Pure data logging -> auto-commits; it is what later unlocks a maintenance release."
+    :request {:op :log-inspection-record :subject "consist-1"
+              :inspection-result "pass"}}
+
+   {:tid "t17"
+    :exercises "A booking/reconciliation record WITH operator-submitted evidence. Pure data logging -> auto-commits."
+    :request {:op :log-reconciliation-record :subject "consist-1"
+              :evidence "operator-submitted-invoice-ref-0001" :amount 15000}}
+
+   {:tid "t18"
+    :exercises "Flagging a track-safety concern. Always escalates -- this actor never resolves or dismisses a concern itself. Approved, which raises the concern on consist-1 and thereby blocks its own later scheduling/maintenance ops."
+    :request {:op :flag-track-safety-concern :subject "consist-1"
+              :note "reported wheel-bearing overheat alarm"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t19"
+    :exercises "Maintenance coordination re-attempted on consist-1 AFTER t18 raised a concern on it. The identical request that committed at t15 now HARD-holds on TWO independent checks at once -- the open track-safety concern and the double-coordination guard."
+    :request {:op :coordinate-maintenance :subject "consist-1"}}
+
+   {:tid "t20"
+    :exercises "Hazmat-transport-scope confirmation for the hazmat consist, WITH operator-submitted evidence. Always escalates; approved, which is what would clear t04's hold."
+    :request {:op :register-hazmat-transport-scope :subject "consist-3"
+              :evidence "operator-submitted-hazmat-handling-protocol-ack-0003"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t21"
+    :exercises "Releasing consist-7 -- open maintenance AND a passing inspection already on file. Always escalates; approved."
+    :request {:op :release-rolling-stock-from-maintenance :subject "consist-7"}
+    :approval {:status :approved :by "op-1"}}
+
+   {:tid "t22"
+    :exercises "A governor-CLEAN maintenance coordination the human VETOES. Distinct from a HARD hold: the governor cleared it, a person did not."
+    :request {:op :coordinate-maintenance :subject "consist-7"}
+    :approval {:status :rejected :by "op-1"}}])
+
+(defn- drive!
+  "Runs one scenario through the real compiled graph and returns the
+  scenario enriched with what the graph actually did."
+  [actor {:keys [tid request approval] :as scenario}]
+  (let [r1 (g/run* actor {:request request :context coordinator} {:thread-id tid})
+        paused? (= :interrupted (:status r1))
+        r2 (when (and approval paused?)
+             (g/run* actor {:approval approval} {:thread-id tid :resume? true}))
+        final (:state (or r2 r1))
+        audit (:audit final [])]
+    (assoc scenario
+           :verdict (:verdict final)
+           :paused? paused?
+           :escalation (first (filter #(= :approval-requested (:t %)) audit))
+           :human (when r2 (:status approval))
+           :disposition (:disposition final))))
 
 (defn run-demo!
-  "Runs a fresh seeded store through a scenario reaching every
-  disposition this actor can produce, adapted from this repo's own
-  `railfreight.sim` demo driver (`clojure -M:dev:run`, run BEFORE
-  writing this file to confirm the seeded consist ids and hold reasons
-  below are the ones the actor really emits).
-
-  HARD holds first, each against a fixture whose state the hold itself
-  never mutates (a hold never reaches `:commit`), so ordering cannot
-  smuggle in an accidental state dependency:
-
-    consist-2  `:log-shipment-record` with no operator-supplied
-               spec-basis                     -> :no-spec-basis
-    consist-2  `:schedule-service-operation` on a record that was
-               therefore never registered     -> :record-not-verified
-    consist-3  `:schedule-service-operation` on a hazmat consist whose
-               transport scope is unconfirmed -> :hazmat-handling-protocol-unconfirmed
-    consist-4  `:schedule-service-operation` with an unresolved
-               track-safety concern on file   -> :open-safety-concern
-    consist-5  `:coordinate-maintenance` while one is already open
-                                              -> :already-coordinating
-    consist-5  `:release-rolling-stock-from-maintenance` with no
-               completed inspection on file   -> :maintenance-release-uninspected
-    consist-4  `:release-rolling-stock-from-maintenance` -- three
-               independent checks fire at once
-                  -> :maintenance-not-open, :maintenance-release-uninspected,
-                     :open-safety-concern
-    consist-1  `:log-inspection-record` citing a code outside the
-               closed vocabulary              -> :inspection-record-invalid
-    consist-1  `:register-hazmat-transport-scope` with no evidence
-                                              -> :hazmat-scope-evidence-missing
-    consist-1  `:log-reconciliation-record` with no evidence
-                                              -> :reconciliation-evidence-missing
-
-  Then the clean paths, including two holds that a LATER, correct
-  operation resolves -- so the console shows the block and the way
-  through it, not just the block:
-
-    consist-1  full lifecycle: record logging (auto-commit -- pure data
-               logging is the only phase-3 `:auto` class), service
-               schedule (escalate -> approve -> commit), a repeat
-               schedule (-> :already-scheduled HARD hold), maintenance
-               coordination (escalate -> approve -> commit), inspection
-               log and reconciliation record (auto-commit),
-               track-safety-concern flag (escalate -> approve ->
-               commit)
-    consist-2  the same record re-logged WITH the operator's citation
-               (auto-commit) then scheduled (escalate -> approve ->
-               commit) -- the :no-spec-basis / :record-not-verified
-               pair above, resolved
-    consist-3  hazmat transport scope registered on operator evidence
-               (escalate -> approve -> commit) then scheduled
-               (escalate -> approve -> commit) -- the
-               :hazmat-handling-protocol-unconfirmed hold, resolved
-    consist-7  released from maintenance on its pre-seeded passing
-               inspection (escalate -> approve -> commit)
-
-  consist-4 (open safety concern) and consist-5 (open maintenance, no
-  inspection) are deliberately left blocked, so the page shows standing
-  blocks and not only resolved ones.
-
-  Returns the resulting store."
+  "Seeds a MemStore, builds the real actor, drives every scenario above
+  through `langgraph.graph/run*` exactly as `railfreight.sim` does, and
+  returns {:db store :runs [..]}. Every number, row and status the
+  renderer below shows is read back out of this store or out of these
+  run results -- none of it is typed by hand."
   []
   (let [db (store/seed-db)
         actor (op/build db)]
+    {:db db :runs (mapv #(drive! actor %) scenarios)}))
 
-    ;; ---------------------- HARD holds (no state mutation) ----------------------
-    (exec! actor "h1" {:op :log-shipment-record :subject "consist-2"
-                       :patch {:id "consist-2" :carrier "Local Freight Rail Co"}})
-    (exec! actor "h2" {:op :schedule-service-operation :subject "consist-2"})
-    (exec! actor "h3" {:op :schedule-service-operation :subject "consist-3"})
-    (exec! actor "h4" {:op :schedule-service-operation :subject "consist-4"})
-    (exec! actor "h5" {:op :coordinate-maintenance :subject "consist-5"})
-    (exec! actor "h6" {:op :release-rolling-stock-from-maintenance :subject "consist-5"})
-    (exec! actor "h7" {:op :release-rolling-stock-from-maintenance :subject "consist-4"})
-    (exec! actor "h8" {:op :log-inspection-record :subject "consist-1"
-                       :inspection-result "excellent"})
-    (exec! actor "h9" {:op :register-hazmat-transport-scope :subject "consist-1"})
-    (exec! actor "h10" {:op :log-reconciliation-record :subject "consist-1"})
-
-    ;; ---------------------- clean lifecycle (consist-1) ----------------------
-    (exec! actor "c1-log" {:op :log-shipment-record :subject "consist-1"
-                           :patch {:id "consist-1" :carrier "Local Freight Rail Co"}
-                           :spec-basis "operator-submitted-sms-registration-JPN-0001"
-                           :legal-basis "operator-submitted"})
-
-    (exec! actor "c1-sched" {:op :schedule-service-operation :subject "consist-1"})
-    (approve! actor "c1-sched")
-
-    ;; the same schedule again -- a HARD double-actuation hold
-    (exec! actor "c1-sched-again" {:op :schedule-service-operation :subject "consist-1"})
-
-    (exec! actor "c1-mnt" {:op :coordinate-maintenance :subject "consist-1"})
-    (approve! actor "c1-mnt")
-
-    (exec! actor "c1-insp" {:op :log-inspection-record :subject "consist-1"
-                            :inspection-result "pass"})
-    (exec! actor "c1-recon" {:op :log-reconciliation-record :subject "consist-1"
-                             :evidence "operator-submitted-invoice-ref-0001"
-                             :amount 15000})
-
-    (exec! actor "c1-concern" {:op :flag-track-safety-concern :subject "consist-1"
-                               :note "reported wheel-bearing overheat alarm"})
-    (approve! actor "c1-concern")
-
-    ;; ---------------- the :no-spec-basis hold, resolved (consist-2) ----------------
-    (exec! actor "c2-log" {:op :log-shipment-record :subject "consist-2"
-                           :patch {:id "consist-2" :carrier "Local Freight Rail Co"}
-                           :spec-basis "operator-submitted-sms-registration-JPN-0002"
-                           :legal-basis "operator-submitted"})
-    (exec! actor "c2-sched" {:op :schedule-service-operation :subject "consist-2"})
-    (approve! actor "c2-sched")
-
-    ;; ------------- the hazmat-scope hold, resolved on evidence (consist-3) -------------
-    (exec! actor "c3-hazmat" {:op :register-hazmat-transport-scope :subject "consist-3"
-                              :evidence "operator-submitted-hazmat-handling-protocol-ack-0003"})
-    (approve! actor "c3-hazmat")
-    (exec! actor "c3-sched" {:op :schedule-service-operation :subject "consist-3"})
-    (approve! actor "c3-sched")
-
-    ;; ---------------- maintenance release on a passing inspection (consist-7) ----------------
-    (exec! actor "c7-release" {:op :release-rolling-stock-from-maintenance :subject "consist-7"})
-    (approve! actor "c7-release")
-
-    db))
-
-;; ----------------------------- rendering -----------------------------
+;; ----------------------------- html helpers -----------------------------
 
 (defn- esc [v]
   (-> (str v)
       (str/replace "&" "&amp;")
       (str/replace "<" "&lt;")
-      (str/replace ">" "&gt;")))
+      (str/replace ">" "&gt;")
+      (str/replace "\"" "&quot;")))
 
-(defn- kw-name [v] (if (keyword? v) (name v) (str v)))
+(defn- fmt
+  "Render a stored value, or an em dash when the domain model carries no
+  value for that field on that record."
+  [v]
+  (if (nil? v) "—" (esc v)))
 
-(defn- ok   [s] (str "<span class=\"ok\">" s "</span>"))
-(defn- warn [s] (str "<span class=\"warn\">" s "</span>"))
-(defn- crit [s] (str "<span class=\"critical\">" s "</span>"))
-(defn- mute [s] (str "<span class=\"muted\">" s "</span>"))
+(defn- code [v] (str "<code>" (esc v) "</code>"))
 
-(defn- hard-hold?
-  "A `:governor-hold` fact whose basis is not the approver's own
-  rejection -- i.e. a hold a human could never have overridden."
-  [f]
-  (and (= :governor-hold (:t f))
-       (not (some #{:approver-rejected} (:basis f)))))
+(defn- flag [v]
+  (if (true? v)
+    "<span class=\"ok\">true</span>"
+    (str "<span class=\"muted\">" (if (nil? v) "—" (esc v)) "</span>")))
 
-(defn- last-fact-for [ledger id]
-  (last (filter #(= (:subject %) id) ledger)))
+(defn- codes
+  "Render a SEQUENCE of keywords in the order the code produced it --
+  used for `:basis`, whose order is the governor's own evaluation
+  order."
+  [coll]
+  (str/join " " (map code coll)))
 
-(defn- last-op-cell [ledger id]
-  (let [f (last-fact-for ledger id)]
+(defn- kw-codes
+  "Render a SET of keywords/strings. Sorted, because a set has no order
+  and an unsorted render would make the output non-deterministic."
+  [coll]
+  (str/join " " (map code (sort-by str coll))))
+
+(defn- tr [& cells] (str "<tr>" (apply str (map #(str "<td>" % "</td>") cells)) "</tr>"))
+
+(defn- table [headers rows]
+  (str "<table><thead><tr>"
+       (apply str (map #(str "<th>" (esc %) "</th>") headers))
+       "</tr></thead><tbody>\n"
+       (str/join "\n" rows)
+       "\n</tbody></table>"))
+
+(defn- card [title note body]
+  (str "<section class=\"card\"><h2>" (esc title) "</h2>"
+       (when note (str "<p class=\"muted\">" note "</p>"))
+       body "</section>"))
+
+;; ----------------------------- sections -----------------------------
+
+(defn- ledger-of [db] (vec (store/ledger db)))
+
+(defn- holds [db]
+  (filterv #(= :governor-hold (:t %)) (ledger-of db)))
+
+(defn- summary-section [db runs]
+  (let [led (ledger-of db)
+        n (fn [t] (count (filter #(= t (:t %)) led)))]
+    (card "Run summary"
+          (str "Every number below is a count over the actor's own append-only ledger "
+               "after driving " (count runs) " requests through "
+               (code "railfreight.operation/build") ".")
+          (table ["Measure" "Count"]
+                 [(tr "requests driven" (str "<span class=\"num\">" (count runs) "</span>"))
+                  (tr "ledger facts" (str "<span class=\"num\">" (count led) "</span>"))
+                  (tr "commits" (str "<span class=\"num ok\">" (n :committed) "</span>"))
+                  (tr "governor HARD holds"
+                      (str "<span class=\"num critical\">" (n :governor-hold) "</span>"))
+                  (tr "human rejections"
+                      (str "<span class=\"num critical\">" (n :approval-rejected) "</span>"))
+                  (tr "escalations offered to a human"
+                      (str "<span class=\"num warn\">"
+                           (count (filter :paused? runs)) "</span>"))
+                  (tr "service-schedule drafts minted"
+                      (str "<span class=\"num\">" (count (store/schedule-history db)) "</span>"))
+                  (tr "maintenance-coordination drafts minted"
+                      (str "<span class=\"num\">" (count (store/maintenance-history db)) "</span>"))]))))
+
+(defn- verdict-cell [{:keys [verdict]}]
+  (cond
+    (nil? verdict) "<span class=\"muted\">—</span>"
+    (:hard? verdict)
+    (str "<span class=\"critical\">HARD</span> "
+         (codes (map :rule (:violations verdict))))
+    (:escalate? verdict)
+    (str "<span class=\"warn\">escalate</span>"
+         (when (:high-stakes? verdict) " <span class=\"muted\">high-stakes</span>"))
+    :else (str "<span class=\"ok\">clean</span> <span class=\"muted\">conf "
+               (esc (:confidence verdict)) "</span>")))
+
+(defn- human-cell [{:keys [approval human paused?]}]
+  (cond
+    (= :approved human) "<span class=\"ok\">approved</span>"
+    (= :rejected human) "<span class=\"critical\">rejected</span>"
+    (and approval (not paused?))
+    "<span class=\"muted\">never offered (no interrupt)</span>"
+    :else "<span class=\"muted\">—</span>"))
+
+(defn- disposition-cell [{:keys [disposition]}]
+  (case disposition
+    :commit "<span class=\"ok\">commit</span>"
+    :hold "<span class=\"critical\">hold</span>"
+    :escalate "<span class=\"warn\">escalate</span>"
+    (str "<span class=\"muted\">" (fmt disposition) "</span>")))
+
+(defn- timeline-section [runs]
+  (card "Request timeline"
+        (str "One row = one <code>langgraph.graph/run*</code> over the compiled actor. "
+             "The governor column is the verdict map the governor itself returned; the human "
+             "column is the decision handed back to the graph while it was paused at "
+             (code ":request-approval")
+             ". The rightmost column is this page's only hand-written domain prose — a static "
+             "description of the fixed op-gate contract each request exercises, not telemetry.")
+        (table ["Thread" "Op" "Subject" "Governor" "Human" "Final" "What this exercises"]
+               (for [{:keys [tid request escalation exercises] :as r} runs]
+                 (tr (code tid)
+                     (code (:op request))
+                     (code (:subject request))
+                     (verdict-cell r)
+                     (human-cell r)
+                     (str (disposition-cell r)
+                          (when-let [reason (:reason escalation)]
+                            (str " <span class=\"muted\">after escalation "
+                                 (code reason) "</span>")))
+                     (str "<span class=\"muted\">" (esc exercises) "</span>"))))))
+
+(defn- holds-section [db]
+  (let [hs (holds db)]
+    (card "Governor HARD holds"
+          (str "Each row is one <code>:violations</code> entry of a <code>:governor-hold</code> "
+               "fact on the append-only ledger. The rule name and the detail text are the "
+               "governor's own output — this page holds no rule text of its own. A HARD hold "
+               "is un-overridable: it never reaches a human at all.")
+          (table ["Rule" "Op" "Subject" "Confidence" "Governor's own detail"]
+                 (for [h hs
+                       v (:violations h)]
+                   (tr (str "<span class=\"critical\">" (esc (:rule v)) "</span>")
+                       (code (:op h))
+                       (code (:subject h))
+                       (str "<span class=\"num\">" (fmt (:confidence h)) "</span>")
+                       (esc (:detail v))))))))
+
+(defn- rejections-section [db]
+  (let [rs (filterv #(= :approval-rejected (:t %)) (ledger-of db))]
+    (when (seq rs)
+      (card "Human rejections"
+            (str "A governor-clean proposal a person declined. Written to the ledger by the same "
+                 (code ":hold") " node, but with basis " (code ":approver-rejected") " — not a "
+                 "compliance violation.")
+            (table ["Op" "Subject" "Basis" "Confidence"]
+                   (for [r rs]
+                     (tr (code (:op r)) (code (:subject r))
+                         (codes (:basis r))
+                         (str "<span class=\"num\">" (fmt (:confidence r)) "</span>"))))))))
+
+(defn- phase-section []
+  (let [ph phase/default-phase
+        {:keys [label writes auto]} (get phase/phases ph)]
+    (card (str "Rollout phase gate — phase " ph " (" label ")")
+          (str "Derived from " (code "railfreight.phase/phases") ". A governor HOLD always stays a "
+               "HOLD; an op that may write but is not auto-eligible escalates to a human even when "
+               "the governor is clean.")
+          (table ["Op" "May write in this phase" "May auto-commit when governor-clean"]
+                 (for [o (sort-by str governor/allowed-ops)]
+                   (tr (code o)
+                       (if (contains? writes o)
+                         "<span class=\"ok\">yes</span>"
+                         "<span class=\"critical\">no — HOLD (:phase-disabled)</span>")
+                       (if (contains? auto o)
+                         "<span class=\"ok\">yes</span>"
+                         "<span class=\"warn\">no — always human approval</span>")))))))
+
+(defn- governor-section []
+  (card "Governor configuration"
+        (str "Read straight off the public vars of " (code "railfreight.governor") " and "
+             (code "railfreight.facts") ".")
+        (table ["Setting" "Value"]
+               [(tr "confidence floor" (code governor/confidence-floor))
+                (tr "allowed ops" (kw-codes governor/allowed-ops))
+                (tr "allowed proposal actions" (kw-codes governor/allowed-actions))
+                (tr "always-human stakes" (kw-codes governor/high-stakes))
+                (tr "recognized inspection results" (kw-codes facts/inspection-results))
+                (tr "citation policy" (code (:policy facts/citation-policy)))
+                (tr "scope-exclusion action phrases"
+                    (str/join "<br>" (map #(str "<code>" (esc %) "</code>")
+                                          (sort governor/scope-exclusion-actions))))])))
+
+(defn- last-fact-for [led subject]
+  (last (filter #(= subject (:subject %)) led)))
+
+(defn- subject-status [led subject]
+  (let [f (last-fact-for led subject)]
     (cond
-      (nil? f) (mute "no activity")
-      (= :committed (:t f)) (ok (str "committed &middot; " (esc (kw-name (:op f)))))
-      (hard-hold? f) (crit (str "HARD hold &middot; "
-                                (esc (str/join ", " (map kw-name (:basis f))))))
-      (= :governor-hold (:t f)) (warn "held")
-      :else (mute (esc (kw-name (:t f)))))))
+      (nil? f) "<span class=\"muted\">no ledger activity</span>"
+      (= :committed (:t f)) "<span class=\"ok\">committed</span>"
+      (= :approval-rejected (:t f)) "<span class=\"critical\">rejected by approver</span>"
+      (= :governor-hold (:t f))
+      (str "<span class=\"critical\">HARD hold</span> " (codes (:basis f)))
+      :else (str "<span class=\"muted\">" (esc (:t f)) "</span>"))))
 
-(defn- yes-no [v yes-label no-label yes-fn no-fn]
-  (if v (yes-fn yes-label) (no-fn no-label)))
+(defn- consists-section [db]
+  (let [led (ledger-of db)]
+    (card "Consists under coordination"
+          (str "Read back from " (code "railfreight.store/all-consists") " AFTER the run — this "
+               "is the SSoT as the commits above left it, not the seed. A field the record does "
+               "not carry shows as —. " (code ":spec-basis") " / " (code ":legal-basis") " are "
+               "OPERATOR-SUPPLIED opaque strings: this actor asserts no regulatory fact of its "
+               "own (docs/adr/0002).")
+          (table ["Consist" "Carrier" "Origin" "Destination" "hazmat?" "registered?"
+                  "hazmat scope confirmed?" "scheduled?" "Schedule no."
+                  "maintenance open?" "Maintenance no." "Last inspection"
+                  "Reconciliation evidence" "Amount" "safety concern?" "Ledger status"]
+                 (for [c (store/all-consists db)]
+                   (tr (code (:id c)) (fmt (:carrier c)) (fmt (:origin c)) (fmt (:destination c))
+                       (flag (:hazmat? c)) (flag (:registered? c))
+                       (flag (:hazmat-handling-confirmed? c))
+                       (flag (:scheduled? c)) (fmt (:schedule-number c))
+                       (flag (:maintenance-open? c)) (fmt (:maintenance-number c))
+                       (fmt (:last-inspection-result c))
+                       (fmt (:last-reconciliation-evidence c))
+                       (str "<span class=\"num\">" (fmt (:last-reconciliation-amount c)) "</span>")
+                       (if (and (true? (:safety-concern-raised? c))
+                                (not (true? (:safety-concern-resolved? c))))
+                         (str "<span class=\"critical\">open</span> "
+                              "<span class=\"muted\">" (fmt (:safety-concern-note c)) "</span>")
+                         "<span class=\"muted\">none</span>")
+                       (subject-status led (:id c))))))))
 
-(defn- consist-row
-  [ledger {:keys [id carrier origin destination cargo-manifest hazmat?
-                  registered? hazmat-handling-confirmed? last-inspection-result
-                  scheduled? schedule-number maintenance-open? maintenance-number
-                  safety-concern-raised? safety-concern-resolved?
-                  last-reconciliation-amount jurisdiction]}]
-  (let [concern-open? (and safety-concern-raised? (not safety-concern-resolved?))]
-    (str "        <tr>"
-         "<td><code>" (esc id) "</code></td>"
-         "<td>" (esc carrier) "</td>"
-         "<td>" (esc origin) " &rarr; " (esc destination) "</td>"
-         "<td>" (esc (str/join "; " cargo-manifest)) "</td>"
-         "<td>" (if hazmat? (warn "hazmat") (mute "general")) "</td>"
-         "<td>" (yes-no registered? "verified" "unregistered" ok crit) "</td>"
-         "<td>" (cond
-                  (not hazmat?) (mute "n/a")
-                  hazmat-handling-confirmed? (ok "confirmed")
-                  :else (crit "unconfirmed")) "</td>"
-         "<td>" (if scheduled?
-                  (ok (str "<code>" (esc schedule-number) "</code>"))
-                  (mute "not scheduled")) "</td>"
-         "<td>" (if maintenance-open?
-                  (warn (str "open" (when maintenance-number
-                                      (str " &middot; <code>" (esc maintenance-number) "</code>"))))
-                  (mute "none open")) "</td>"
-         "<td>" (if last-inspection-result
-                  (if (= "pass" last-inspection-result)
-                    (ok (esc last-inspection-result))
-                    (warn (esc last-inspection-result)))
-                  (mute "none")) "</td>"
-         "<td>" (if concern-open? (crit "open") (mute "clear")) "</td>"
-         "<td>" (if last-reconciliation-amount
-                  (str "<span class=\"num\">" (esc last-reconciliation-amount) "</span>")
-                  (mute "&mdash;")) "</td>"
-         "<td>" (esc jurisdiction) "</td>"
-         "<td>" (last-op-cell ledger id) "</td>"
-         "</tr>")))
+(defn- cargo-section [db]
+  (card "Cargo manifests"
+        (str "The seeded consist/cargo-manifest lines, read back from "
+             (code "railfreight.store/all-consists") ". This actor logs and coordinates them; "
+             "it never clears a train for departure and never decides a hazmat-handling protocol.")
+        (table ["Consist" "hazmat?" "Cargo manifest lines"]
+               (for [c (store/all-consists db)]
+                 (tr (code (:id c)) (flag (:hazmat? c))
+                     (if (seq (:cargo-manifest c))
+                       (str/join "<br>" (map esc (:cargo-manifest c)))
+                       "<span class=\"muted\">—</span>"))))))
 
-(defn- gate-rows
-  "The action gate, DERIVED from `railfreight.phase/phases` at the
-  operator's own phase and from `railfreight.governor/allowed-ops` --
-  not transcribed. `:writes` says the op may write at all in this
-  phase; `:auto` says it may commit without a human when the governor
-  is clean. The five coordination ops are absent from every phase's
-  `:auto` set as a structural fact, so they read as always-human here
-  because the source data says so."
-  [phase-n]
-  (let [{:keys [label writes auto]} (get phase/phases phase-n)]
-    (for [o (sort-by kw-name governor/allowed-ops)]
-      (str "        <tr>"
-           "<td><code>" (esc o) "</code></td>"
-           "<td>" (yes-no (contains? writes o)
-                          (str "writable in phase " phase-n " (" (esc label) ")")
-                          (str "disabled in phase " phase-n)
-                          ok crit) "</td>"
-           "<td>" (if (contains? auto o)
-                    (ok "may auto-commit when the governor is clean")
-                    (warn "ALWAYS human approval &middot; never in any phase&rsquo;s :auto set")) "</td>"
-           "</tr>"))))
+(defn- schedules-section [db]
+  (let [hist (store/schedule-history db)]
+    (card "Service-schedule drafts"
+          (str "Committed drafts from " (code "railfreight.store/schedule-history")
+               ". The schedule number is minted by "
+               (code "railfreight.registry/register-service-schedule") " at commit time. Each is "
+               "a scheduling COORDINATION note — nothing here dispatches a train.")
+          (if (seq hist)
+            (table ["Record id" "Kind" "Consist" "Jurisdiction" "immutable"]
+                   (for [r hist]
+                     (tr (code (get r "record_id")) (fmt (get r "kind"))
+                         (code (get r "consist_id")) (fmt (get r "jurisdiction"))
+                         (flag (get r "immutable")))))
+            "<p class=\"muted\">none committed in this run</p>"))))
 
-(defn- hold-reason-rows
-  "One row per DISTINCT hold rule this run actually produced, carrying
-  the governor's own detail string verbatim (first occurrence), in
-  ledger order."
-  [ledger]
-  (let [violations (->> ledger (filter hard-hold?) (mapcat :violations))]
-    (->> violations
-         (reduce (fn [acc {:keys [rule detail]}]
-                   (if (contains? (:seen acc) rule)
-                     (update-in acc [:counts rule] inc)
-                     (-> acc
-                         (update :seen conj rule)
-                         (update :order conj [rule detail])
-                         (assoc-in [:counts rule] 1))))
-                 {:seen #{} :order [] :counts {}})
-         ((fn [{:keys [order counts]}]
-            (for [[rule detail] order]
-              (str "        <tr>"
-                   "<td><code>" (esc rule) "</code></td>"
-                   "<td><span class=\"num\">" (get counts rule) "</span></td>"
-                   "<td>" (esc detail) "</td>"
-                   "</tr>")))))))
+(defn- maintenance-section [db]
+  (let [hist (store/maintenance-history db)]
+    (card "Maintenance-coordination drafts"
+          (str "Committed drafts from " (code "railfreight.store/maintenance-history")
+               ", minted by " (code "railfreight.registry/register-maintenance-coordination")
+               ". A coordination note, never a real maintenance-release decision.")
+          (if (seq hist)
+            (table ["Record id" "Kind" "Consist" "Jurisdiction" "immutable"]
+                   (for [r hist]
+                     (tr (code (get r "record_id")) (fmt (get r "kind"))
+                         (code (get r "consist_id")) (fmt (get r "jurisdiction"))
+                         (flag (get r "immutable")))))
+            "<p class=\"muted\">none committed in this run</p>"))))
 
-(defn- ledger-row [{:keys [t op subject basis summary] :as f}]
-  (str "        <tr>"
-       "<td>" (cond
-                (= :committed t) (ok "committed")
-                (hard-hold? f) (crit "HARD hold")
-                (= :governor-hold t) (warn "hold")
-                :else (esc (kw-name t))) "</td>"
-       "<td><code>" (esc op) "</code></td>"
-       "<td><code>" (esc subject) "</code></td>"
-       "<td>" (esc (str/join ", " (map kw-name basis))) "</td>"
-       "<td>" (esc (or summary "")) "</td>"
-       "</tr>"))
+(defn- ledger-section [db]
+  (card "Audit ledger (append-only)"
+        (str "The full ledger, in append order, exactly as "
+             (code "railfreight.store/ledger") " returns it. Note that "
+             (code ":approval-requested") " / " (code ":approval-granted")
+             " are emitted to the graph's in-memory " (code ":audit")
+             " channel only — " (code "railfreight.operation")
+             " never appends them to the store ledger, so an approved request is visible here "
+             "as the " (code ":committed") " fact it produced.")
+        (table ["#" "Fact" "Op" "Subject" "Actor" "Disposition" "Basis"]
+               (map-indexed
+                (fn [i f]
+                  (tr (str "<span class=\"num\">" (esc (inc i)) "</span>")
+                      (let [cls (case (:t f)
+                                  :committed "ok"
+                                  :governor-hold "critical"
+                                  :approval-rejected "critical"
+                                  "muted")]
+                        (str "<span class=\"" cls "\">" (esc (:t f)) "</span>"))
+                      (code (:op f)) (code (:subject f)) (fmt (:actor f))
+                      (fmt (:disposition f)) (codes (:basis f))))
+                (ledger-of db)))))
 
-(defn- draft-rows [records]
-  (for [r records]
-    (str "        <tr>"
-         "<td><code>" (esc (get r "record_id")) "</code></td>"
-         "<td>" (esc (get r "kind")) "</td>"
-         "<td><code>" (esc (get r "consist_id")) "</code></td>"
-         "<td>" (esc (get r "jurisdiction")) "</td>"
-         "<td>" (if (get r "immutable") (ok "immutable") (mute "mutable")) "</td>"
-         "</tr>")))
+;; ----------------------------- page -----------------------------
 
 (defn render
-  "Renders the full operator-console.html document from a store `db`
-  that has already run `run-demo!` (or any other real scenario)."
-  [db]
-  (let [ledger (vec (store/ledger db))
-        consists (store/all-consists db)
-        commits (filter #(= :committed (:t %)) ledger)
-        holds (filter hard-hold? ledger)
-        phase-n (:phase operator)]
-    (str
-     "<html lang=\"ja\"><head><meta charset=\"utf-8\">"
-     "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-     "<title>cloud-itonami-isic-4912 &middot; community freight rail operations coordination</title><style>"
-     (jp-go-dds.skin/dds+skin)
-     "</style></head><body>\n"
-     "<header class=\"bar\">\n"
-     "  <h1>Freight rail transport (ISIC 4912) &mdash; Operator Console</h1>\n"
-     "  <span class=\"badge\">read-only sample &middot; governor-gated &middot; scheduling / safety-concern / maintenance / hazmat-scope / release always human-approved</span>\n"
-     "</header>\n"
-     "<main>\n"
-
-     "  <section class=\"card\">\n"
-     "    <h2>This run</h2>\n"
-     "    <p class=\"muted\">Build-time generated from <code>railfreight.store</code> by <code>railfreight.render-html</code> (<code>clojure -M:dev:render-html</code>), driving the real <code>railfreight.operation</code> StateGraph through <code>railfreight.governor</code> at rollout phase <span class=\"num\">" phase-n "</span> (<code>" (esc (:label (get phase/phases phase-n))) "</code>). No timestamps, no generated ids &mdash; two runs from the same seed are byte-identical.</p>\n"
-     "    <table>\n"
-     "      <thead><tr><th>Measure</th><th>Count</th></tr></thead>\n"
-     "      <tbody>\n"
-     "        <tr><td>Ledger facts</td><td><span class=\"num\">" (count ledger) "</span></td></tr>\n"
-     "        <tr><td>Committed operations</td><td><span class=\"num\">" (count commits) "</span></td></tr>\n"
-     "        <tr><td>HARD governor holds (never reached a human)</td><td><span class=\"num\">" (count holds) "</span></td></tr>\n"
-     "        <tr><td>Distinct hold rules exercised</td><td><span class=\"num\">" (count (distinct (mapcat :basis holds))) "</span></td></tr>\n"
-     "        <tr><td>Draft service-schedule records</td><td><span class=\"num\">" (count (store/schedule-history db)) "</span></td></tr>\n"
-     "        <tr><td>Draft maintenance-coordination records</td><td><span class=\"num\">" (count (store/maintenance-history db)) "</span></td></tr>\n"
-     "      </tbody>\n"
-     "    </table>\n"
-     "  </section>\n"
-
-     "  <section class=\"card\">\n"
-     "    <h2>Consists under coordination</h2>\n"
-     "    <p class=\"muted\">Every cell below is read back out of the store this run produced. <code>consist-4</code> (unresolved track-safety concern) and <code>consist-5</code> (open maintenance, no completed inspection) stay blocked deliberately &mdash; a standing block is as real an outcome as a resolved one.</p>\n"
-     "    <table>\n"
-     "      <thead><tr><th>Consist</th><th>Carrier</th><th>Route</th><th>Cargo manifest</th><th>Cargo class</th><th>Record</th><th>Hazmat scope</th><th>Service schedule</th><th>Maintenance</th><th>Last inspection</th><th>Safety concern</th><th>Reconciled</th><th>Jurisdiction</th><th>Last op</th></tr></thead>\n"
-     "      <tbody>\n"
-     (str/join "\n" (map (partial consist-row ledger) consists)) "\n"
-     "      </tbody>\n"
-     "    </table>\n"
-     "  </section>\n"
-
-     "  <section class=\"card\">\n"
-     "    <h2>Action gate (Rail Freight Governor + rollout phase)</h2>\n"
-     "    <p class=\"muted\">Derived from <code>railfreight.governor/allowed-ops</code> and <code>railfreight.phase/phases</code>, not transcribed. The closed <code>:action</code> allowlist has <span class=\"num\">" (count governor/allowed-actions) "</span> members and the scope-exclusion scanner carries <span class=\"num\">" (count governor/scope-exclusion-actions) "</span> finalization-action phrases; a track/dispatch-safety-authority decision is not representable in either, so it is blocked structurally rather than by policy. Confidence floor <span class=\"num\">" governor/confidence-floor "</span>.</p>\n"
-     "    <table>\n"
-     "      <thead><tr><th>Op</th><th>Write gate</th><th>Commit gate</th></tr></thead>\n"
-     "      <tbody>\n"
-     (str/join "\n" (gate-rows phase-n)) "\n"
-     "      </tbody>\n"
-     "    </table>\n"
-     "  </section>\n"
-
-     "  <section class=\"card\">\n"
-     "    <h2>HARD holds this run</h2>\n"
-     "    <p class=\"muted\">A HARD governor violation is un-overridable: the run never reaches the approval node at all, so no human ever sees it. Detail text is the governor&rsquo;s own.</p>\n"
-     "    <table>\n"
-     "      <thead><tr><th>Rule</th><th>Times</th><th>Governor detail</th></tr></thead>\n"
-     "      <tbody>\n"
-     (str/join "\n" (hold-reason-rows ledger)) "\n"
-     "      </tbody>\n"
-     "    </table>\n"
-     "  </section>\n"
-
-     "  <section class=\"card\">\n"
-     "    <h2>Audit ledger (this run)</h2>\n"
-     "    <p class=\"muted\">Append-only decision-fact log &mdash; every hold and every commit, in order. Basis is the cited evidence for a commit and the violated rules for a hold.</p>\n"
-     "    <table>\n"
-     "      <thead><tr><th>Disposition</th><th>Op</th><th>Consist</th><th>Basis</th><th>Summary</th></tr></thead>\n"
-     "      <tbody>\n"
-     (str/join "\n" (map ledger-row ledger)) "\n"
-     "      </tbody>\n"
-     "    </table>\n"
-     "  </section>\n"
-
-     "  <section class=\"card\">\n"
-     "    <h2>Draft coordination records</h2>\n"
-     "    <p class=\"muted\">Built by <code>railfreight.registry</code> &mdash; a jurisdiction-scoped coordination DRAFT, never a real dispatch clearance or maintenance-release decision. Every certificate this actor emits is unsigned; signature is the certified operator&rsquo;s act.</p>\n"
-     "    <table>\n"
-     "      <thead><tr><th>Record</th><th>Kind</th><th>Consist</th><th>Jurisdiction</th><th>Status</th></tr></thead>\n"
-     "      <tbody>\n"
-     (str/join "\n" (concat (draft-rows (store/schedule-history db))
-                            (draft-rows (store/maintenance-history db)))) "\n"
-     "      </tbody>\n"
-     "    </table>\n"
-     "  </section>\n"
-
-     "</main>\n"
-     "<footer>\n"
-     "  <p>This actor coordinates freight-rail operations. It is not the dispatcher, not the track-safety authority, and not rolling-stock control &mdash; see <code>railfreight.governor</code> ns docstring <code>SCOPE</code>.</p>\n"
-     "</footer>\n"
-     "</body></html>\n")))
+  "The whole page, from the post-run store and the run log. Every row,
+  number and status below is derived from real store/ledger output."
+  [{:keys [db runs]}]
+  (str "<!DOCTYPE html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\">"
+       "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+       "<meta name=\"color-scheme\" content=\"light\">"
+       "<title>Operator console — cloud-itonami-isic-4912 (railfreight)</title>"
+       "<style>" (jp-go-dds.skin/dds+skin) "</style></head>\n<body>\n"
+       "<header class=\"bar\">"
+       "<h1>Community freight rail transport — operator console</h1>"
+       "</header>\n"
+       "<p class=\"subtitle\"><span class=\"badge\">ISIC 4912</span> "
+       "<span class=\"badge\">railfreight</span> "
+       "governor <code>rail-freight-governor</code> · actor "
+       (esc (:actor-id coordinator)) " · role " (esc (:actor-role coordinator))
+       " · phase " (esc (:phase coordinator)) "</p>\n"
+       "<main>\n"
+       (str/join "\n"
+                 (remove nil?
+                         [(summary-section db runs)
+                          (timeline-section runs)
+                          (holds-section db)
+                          (rejections-section db)
+                          (phase-section)
+                          (governor-section)
+                          (consists-section db)
+                          (cargo-section db)
+                          (schedules-section db)
+                          (maintenance-section db)
+                          (ledger-section db)]))
+       "\n</main>\n<footer>"
+       "Generated at build time by <code>railfreight.render-html</code> "
+       "(<code>clojure -M:dev:render-html</code>) by driving the real "
+       "<code>railfreight.operation</code> actor graph over the real "
+       "<code>railfreight.store</code> seed. Deterministic — no clock, no randomness, no network. "
+       "No usage, revenue or performance metric is claimed anywhere on this page."
+       "</footer>\n</body>\n</html>\n"))
 
 (defn -main [& args]
   (let [out (or (first args) "docs/samples/operator-console.html")
-        db (run-demo!)
-        ledger (vec (store/ledger db))
-        holds (filterv #(= :governor-hold (:t %)) ledger)]
-    ;; Build-time invariant, not a convention: this console exists to show
-    ;; that a HARD hold is un-overridable and never reaches a human. A run
-    ;; that produced no hold at all would render a page making a claim its
-    ;; own evidence does not support, so refuse to write it.
-    (when (zero? (count holds))
-      (throw (ex-info (str "refusing to write " out
-                           ": the scenario produced ZERO :governor-hold ledger facts, so the"
-                           " console cannot honestly show a HARD hold. Fix railfreight.render-html/run-demo!"
-                           " (or the governor) before regenerating.")
-                      {:out out :ledger-facts (count ledger) :holds 0})))
-    (spit out (render db))
-    (println "wrote" out "-" (count ledger) "ledger facts,"
-             (count holds) "governor holds,"
-             (count (filter #(= :committed (:t %)) ledger)) "commits,"
-             (count (store/schedule-history db)) "schedule drafts,"
-             (count (store/maintenance-history db)) "maintenance drafts")))
+        {:keys [db runs] :as result} (run-demo!)
+        hs (holds db)]
+    ;; A console that shows no real HARD hold is not evidence of a governor.
+    (when (empty? hs)
+      (throw (ex-info "no :governor-hold fact on the ledger — refusing to write a console that shows no real hold"
+                      {:ledger-facts (count (store/ledger db))
+                       :requests (count runs)})))
+    (let [f (java.io.File. ^String out)]
+      (when-let [p (.getParentFile f)] (.mkdirs p))
+      (spit f (render result)))
+    (println "wrote" out
+             (str "(" (count (store/ledger db)) " ledger facts, "
+                  (count hs) " HARD holds, "
+                  (count runs) " requests)"))))
