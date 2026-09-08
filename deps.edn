@@ -13,7 +13,12 @@
  ;; This repo is standalone (forkable outside the workspace); the
  ;; :local/root paths only resolve inside the monorepo checkout -- a
  ;; standalone fork should override them with git coordinates.
- :deps {;; jp-go-dds -- this workspace's base design system (デジタル庁
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       ;; jp-go-dds -- this workspace's base design system (デジタル庁
         ;; デザインシステム). Used ONLY by `railfreight.render-html` to skin
         ;; the build-time operator console; the actor itself has no UI.
         io.github.kotoba-lang/jp-go-digital-design-system

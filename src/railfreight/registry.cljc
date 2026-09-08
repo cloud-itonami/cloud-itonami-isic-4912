@@ -18,7 +18,7 @@
   decision -- both of those remain a certified dispatcher/track-safety
   authority's own act, entirely outside this actor's closed op
   allowlist (see `railfreight.governor` ns docstring `SCOPE`)."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn- unsigned-certificate
   "Every certificate this actor produces is UNSIGNED -- signature is
@@ -50,7 +50,7 @@
     (throw (ex-info "service-schedule: jurisdiction required" {})))
   (when (< sequence 0)
     (throw (ex-info "service-schedule: sequence must be >= 0" {})))
-  (let [schedule-number (str (str/upper-case jurisdiction) "-SCH-" (zero-pad sequence 6))
+  (let [schedule-number (str (str/upper jurisdiction) "-SCH-" (zero-pad sequence 6))
         record {"record_id" schedule-number
                 "kind" "service-schedule-draft"
                 "consist_id" consist-id
@@ -75,7 +75,7 @@
     (throw (ex-info "maintenance-coordination: jurisdiction required" {})))
   (when (< sequence 0)
     (throw (ex-info "maintenance-coordination: sequence must be >= 0" {})))
-  (let [maintenance-number (str (str/upper-case jurisdiction) "-MNT-" (zero-pad sequence 6))
+  (let [maintenance-number (str (str/upper jurisdiction) "-MNT-" (zero-pad sequence 6))
         record {"record_id" maintenance-number
                 "kind" "maintenance-coordination-draft"
                 "consist_id" consist-id
