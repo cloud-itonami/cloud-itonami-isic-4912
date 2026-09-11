@@ -178,7 +178,7 @@ db`-backed), proven to satisfy the same contract in
   exclusion bug class -- not just careful wording.
 - `MemStore` ‖ `DatomicStore` parity is proven by
   `test/railfreight/store_contract_test.cljk`.
-- The demo (`clojure -M:dev:run`) walks one clean record-log +
+- The demo (`kbb -M:dev:run`) walks one clean record-log +
   schedule + maintenance-coordination + concern-flag lifecycle, plus
   seven HARD-hold scenarios (no-spec-basis, unregistered record on two
   different ops, unconfirmed hazmat-handling, an open safety concern

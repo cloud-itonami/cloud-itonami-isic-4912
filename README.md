@@ -117,9 +117,9 @@ reconciliation *contracts*, as distinct from this actor's own minimal
 booking/reconciliation record-keeping) remains a follow-up.
 
 ```bash
-clojure -M:dev:test  # 0 failures, 0 errors (offline: local sibling checkouts)
-clojure -M:dev:run    # walk the HARD-hold scenarios + demo lifecycle
-clojure -M:lint       # clj-kondo, 0 errors
+kbb -M:dev:test  # 0 failures, 0 errors (offline: local sibling checkouts)
+kbb -M:dev:run    # walk the HARD-hold scenarios + demo lifecycle
+kbb -M:lint       # clj-kondo, 0 errors
 ```
 
 ## License
