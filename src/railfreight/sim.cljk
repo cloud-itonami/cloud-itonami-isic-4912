@@ -33,7 +33,7 @@
   not-allowlisted`/`action-not-allowlisted`/`scope-exclusion-
   violation`) are never reachable via this well-behaved mock advisor's
   own output -- they are exercised directly in
-  `test/railfreight/governor_contract_test.clj` against a hand-crafted
+  `test/railfreight/governor_contract_test.cljk` against a hand-crafted
   adversarial proposal instead."
   (:require [langgraph.graph :as g]
             [railfreight.store :as store]
