@@ -35,7 +35,7 @@
   the page a lie -- that failure is a build failure here, not a
   convention.
 
-  Usage: `clojure -M:dev:render-html [out-file]`
+  Usage: `kbb -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
   (:require [jp-go-dds.skin]
             [kotoba.lang.text :as str]
@@ -61,7 +61,7 @@
 (defn run-demo!
   "Runs a fresh seeded store through a scenario reaching every
   disposition this actor can produce, adapted from this repo's own
-  `railfreight.sim` demo driver (`clojure -M:dev:run`, run BEFORE
+  `railfreight.sim` demo driver (`kbb -M:dev:run`, run BEFORE
   writing this file to confirm the seeded consist ids and hold reasons
   below are the ones the actor really emits).
 
@@ -351,7 +351,7 @@
 
      "  <section class=\"card\">\n"
      "    <h2>This run</h2>\n"
-     "    <p class=\"muted\">Build-time generated from <code>railfreight.store</code> by <code>railfreight.render-html</code> (<code>clojure -M:dev:render-html</code>), driving the real <code>railfreight.operation</code> StateGraph through <code>railfreight.governor</code> at rollout phase <span class=\"num\">" phase-n "</span> (<code>" (esc (:label (get phase/phases phase-n))) "</code>). No timestamps, no generated ids &mdash; two runs from the same seed are byte-identical.</p>\n"
+     "    <p class=\"muted\">Build-time generated from <code>railfreight.store</code> by <code>railfreight.render-html</code> (<code>kbb -M:dev:render-html</code>), driving the real <code>railfreight.operation</code> StateGraph through <code>railfreight.governor</code> at rollout phase <span class=\"num\">" phase-n "</span> (<code>" (esc (:label (get phase/phases phase-n))) "</code>). No timestamps, no generated ids &mdash; two runs from the same seed are byte-identical.</p>\n"
      "    <table>\n"
      "      <thead><tr><th>Measure</th><th>Count</th></tr></thead>\n"
      "      <tbody>\n"

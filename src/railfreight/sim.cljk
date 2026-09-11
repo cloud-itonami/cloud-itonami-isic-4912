@@ -1,5 +1,5 @@
 (ns railfreight.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks the HARD-hold scenarios
+  "Demo driver -- `kbb -M:dev:run`. Walks the HARD-hold scenarios
   first (each against a fixture whose state the hold itself never
   mutates, so ordering can't smuggle in an accidental state
   dependency), THEN a clean consist through the full happy-path
