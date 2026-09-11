@@ -13,7 +13,7 @@
                         `langchain.db`'s `:db-api` (see langchain.kotoba-db).
 
   Both implement the same protocol and pass the same contract
-  (test/railfreight/store_contract_test.clj), which is the whole point:
+  (test/railfreight/store_contract_test.cljk), which is the whole point:
   the actor, the Rail Freight Governor and the audit ledger never know
   which SSoT they run on.
 

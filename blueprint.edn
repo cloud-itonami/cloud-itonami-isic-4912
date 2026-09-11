@@ -75,12 +75,12 @@
  (`interrupt-before`, checkpoint-based resume) at TWO independent
  layers (governor `high-stakes` + `railfreight.phase`'s permanent
  absence from every phase's `:auto` set) -- proven end to end by
- `test/railfreight/governor_contract_test.clj` against the REAL
- compiled graph, `test/railfreight/governor_self_trip_test.clj`
+ `test/railfreight/governor_contract_test.cljk` against the REAL
+ compiled graph, `test/railfreight/governor_self_trip_test.cljk`
  (a dedicated regression test against a fleet-wide self-tripping
  scope-exclusion bug class, run across all eight ops), and
- `test/railfreight/phase_test.clj`. MemStore ‖ DatomicStore parity
- proven by `test/railfreight/store_contract_test.clj`. CI
+ `test/railfreight/phase_test.cljk`. MemStore ‖ DatomicStore parity
+ proven by `test/railfreight/store_contract_test.cljk`. CI
  (`.github/workflows/ci.yml`, sibling-checkout pattern) was missing
  and is added in this fix. See docs/adr/0001 (original architecture)
  and docs/adr/0002 (fabrication correction + business-scope

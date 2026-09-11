@@ -77,7 +77,7 @@ from the full finalization-action phrases in
 `railfreight.governor/scope-exclusion-actions` ("clear THIS consist
 for departure", "override THE hazmat-handling protocol") -- phrased
 as the complete action, not a noun a denial sentence would also
-contain. `test/railfreight/governor_self_trip_test.clj` is the actual
+contain. `test/railfreight/governor_self_trip_test.cljk` is the actual
 guarantee, not wording care alone: it runs the default mock advisor's
 `infer` across every op and every seeded consist (including the
 hazmat/open-concern/already-open/no-spec-basis branches) and asserts
@@ -146,7 +146,7 @@ build on the most-proven path.
 `railfreight.store/Store` is implemented by both `MemStore` (atom-
 backed, default for dev/tests/demo) and `DatomicStore` (`langchain.
 db`-backed), proven to satisfy the same contract in
-`test/railfreight/store_contract_test.clj`.
+`test/railfreight/store_contract_test.cljk`.
 
 ## Alternatives considered
 
@@ -173,11 +173,11 @@ db`-backed), proven to satisfy the same contract in
   pre-existing `blueprint.edn` (no other field changed).
 - Establishes the closed four-op/four-action allowlist as a literal,
   structurally-enforced (not merely documented) invariant.
-- `test/railfreight/governor_self_trip_test.clj` is a dedicated,
+- `test/railfreight/governor_self_trip_test.cljk` is a dedicated,
   fleet-pattern regression test against the self-tripping scope-
   exclusion bug class -- not just careful wording.
 - `MemStore` ‖ `DatomicStore` parity is proven by
-  `test/railfreight/store_contract_test.clj`.
+  `test/railfreight/store_contract_test.cljk`.
 - The demo (`clojure -M:dev:run`) walks one clean record-log +
   schedule + maintenance-coordination + concern-flag lifecycle, plus
   seven HARD-hold scenarios (no-spec-basis, unregistered record on two

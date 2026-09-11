@@ -41,7 +41,7 @@
       forbidden by design\" from \"citations missing\" and stops
       reporting this repo as a real-world-ingest gap that must never
       be closed.
-    - `test/railfreight/facts_test.clj` asserts this namespace contains
+    - `test/railfreight/facts_test.cljk` asserts this namespace contains
       no absolute http(s) URL and no regulatory-citation shape, so
       reintroducing the fabrication fails CI instead of passing review.")
 

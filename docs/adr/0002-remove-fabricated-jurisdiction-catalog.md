@@ -109,7 +109,7 @@ instead of three. `:log-inspection-record`/`:log-reconciliation-
 record` join `:log-shipment-record` as the phase-3 `auto-eligible-ops`
 set (pure data logging, no operational/safety authorization weight of
 their own) — `phase-3-auto-commits-only-no-operational-risk-ops`
-(`test/railfreight/phase_test.clj`) now asserts this three-member set
+(`test/railfreight/phase_test.cljk`) now asserts this three-member set
 instead of the original one-member set.
 
 ### Decision 3: CI added
@@ -148,14 +148,14 @@ Decision 7 — so that sibling is not checked out).
 - The closed op allowlist grows from four to eight members; the
   closed action allowlist grows from four to eight members
   (1:1, unchanged discipline from ADR-0001 Decision 3).
-- `test/railfreight/facts_test.clj` is rewritten (the old catalog-
+- `test/railfreight/facts_test.cljk` is rewritten (the old catalog-
   presence assertions are gone; new assertions cover the closed
   `inspection-results` vocabulary). `test/railfreight/governor_
   contract_test.clj` gains dedicated HARD-hold + happy-path coverage
   for all three new ops, mirroring the existing coverage style for the
-  original four. `test/railfreight/governor_self_trip_test.clj`'s
+  original four. `test/railfreight/governor_self_trip_test.cljk`'s
   regression guarantee is extended to run across all eight ops, not
-  only the original four. `test/railfreight/store_contract_test.clj`
+  only the original four. `test/railfreight/store_contract_test.cljk`
   gains MemStore ‖ DatomicStore write-parity coverage for the four new
   commit actions.
 - `blueprint.edn`'s `:implemented-slice` is updated to describe this
