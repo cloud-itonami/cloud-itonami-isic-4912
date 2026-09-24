@@ -1,0 +1,33 @@
+;; What this vertical's robot physically does, declared for
+;; kotoba.robotics.process (kotoba-lang/robotics). `kbb -M:dev:physics` runs it.
+;;
+;; README "Robotics premise": robots perform the physical work of freight
+;; rail (ISIC 4912) -- track inspection, rolling-stock / wagon maintenance,
+;; hazmat-placard verification. Here: a battery shunting robot moving a
+;; loaded wagon group along a siding in the yard, and the bottom discharge of
+;; a liquid-bulk tank wagon at the unloading point (the robot opens the
+;; outlet valve and watches the level).
+;;
+;; Every number without a cited source is marked `estimate` in its :basis.
+;; Replacing an estimate with a sourced value is this bot's growth work.
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isic-4912"
+ :cases
+ [{:id :shunt-wagon-group-on-siding
+   :kind :transport
+   :procedure "battery shunting robot (20 t) pushes a 100 t loaded wagon group 200 m along a siding to the loading track"
+   :params {:mass-kg 20000.0 :payload-kg 100000.0 :distance-m 200.0 :v-max-mps 1.5 :a-max-mps2 0.2
+            :brake-decel-mps2 0.4 :drive-force-n 30000.0 :crr 0.002 :cog-height-m 1.0
+            :support-half-length-m 3.0 :max-time-s 1800.0}
+   :sweep {:param :slope-deg :values [0.0 0.25 0.5 0.75 1.0 1.5]}
+   :quantity :cycle-time-s
+   :limit {:max 240.0 :basis "estimate: one shunting move should fit a ~4 min slot in the yard plan; a stall (tractive effort below grade + rolling resistance) is out of tolerance"}
+   :boundary {:lo 0.0 :hi 3.0}}
+  {:id :tank-wagon-bottom-discharge
+   :kind :tank-drain
+   :procedure "liquid-bulk tank wagon (~80 m3, modelled as a constant 28.6 m2 plan area over 2.8 m of liquid) drains by gravity through its bottom outlet"
+   :params {:tank-area-m2 28.6 :h0-m 2.8 :h-target-m 0.05 :cd 0.6 :dt-s 1.0 :max-time-s 36000.0}
+   :sweep {:param :orifice-area-m2 :values [0.00503 0.00785 0.01227 0.01767 0.0314]}
+   :quantity :time-to-target-s
+   :limit {:max 3600.0 :basis "estimate: a 1 h unloading slot per wagon; outlet sizes are nominal 80/100/125/150/200 mm bores and the constant-area tank is an approximation of the horizontal barrel"}
+   :boundary {:lo 0.003 :hi 0.05}}]}
