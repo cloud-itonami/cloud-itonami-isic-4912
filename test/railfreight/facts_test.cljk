@@ -9,7 +9,7 @@
   `:log-inspection-record` op cites."
   (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.lang.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [railfreight.facts :as facts]))
 
 (deftest inspection-results-closed-vocabulary
