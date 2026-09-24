@@ -13,7 +13,7 @@
     directly against hand-crafted adversarial proposals, since the
     well-behaved mock advisor never reaches them on its own (see
     `railfreight.sim` ns docstring)."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [langgraph.graph :as g]
             [railfreight.governor :as governor]
             [railfreight.railfreightllm :as railfreightllm]

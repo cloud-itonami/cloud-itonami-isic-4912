@@ -18,7 +18,7 @@
   the resulting proposals trip `scope-exclusion-violations` -- the
   actual guarantee, not wording care alone."
   (:require [kotoba.lang.text :as str]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [railfreight.governor :as governor]
             [railfreight.railfreightllm :as llm]
             [railfreight.store :as store]))
