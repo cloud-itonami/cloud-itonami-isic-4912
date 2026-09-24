@@ -5,7 +5,7 @@
   scope`/`:release-rolling-stock-from-maintenance` must NEVER be a
   member of any phase's `:auto` set."
   (:require [clojure.set :as set]
-            [clojure.test :refer [deftest is testing]]
+            [kotoba.test :refer [deftest is testing]]
             [railfreight.phase :as phase]))
 
 (def ^:private never-auto-ops
