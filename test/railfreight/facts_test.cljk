@@ -8,7 +8,7 @@
   non-regulatory `inspection-results` vocabulary this actor's own
   `:log-inspection-record` op cites."
   (:require [kotoba.test :refer [deftest is testing]]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [railfreight.facts :as facts]))
 

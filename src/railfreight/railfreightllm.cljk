@@ -65,7 +65,7 @@
   scans for) -- and `railfreight.governor-self-trip-test` proves this
   holds for every proposal this advisor's default `infer` can produce,
   rather than relying on wording care alone."
-  (:require #?(:clj  [clojure.edn :as edn]
+  (:require #?(:clj  [kotoba.lang.edn :as edn]
                :cljs [cljs.reader :as edn])
             [kotoba.lang.text :as str]
             [railfreight.store :as store]
