@@ -4,7 +4,7 @@
   concern`/`:coordinate-maintenance`/`:register-hazmat-transport-
   scope`/`:release-rolling-stock-from-maintenance` must NEVER be a
   member of any phase's `:auto` set."
-  (:require [clojure.set :as set]
+  (:require [kotoba.lang.coll :as set]
             [kotoba.test :refer [deftest is testing]]
             [railfreight.phase :as phase]))
 
